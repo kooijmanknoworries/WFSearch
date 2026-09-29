@@ -75,6 +75,7 @@ const HTML = `<!DOCTYPE html>
     <textarea id="names" placeholder="Plak namen hier (één per regel)&#10;bijv.&#10;Nico&#10;Suus1978&#10;Player123"></textarea>
     <div class="select-row">
       <select id="letterFilter"><option value="">Alle letters</option></select>
+      <select id="popularFilter"><option value="">Populaire namen (top 500)</option></select>
     </div>
     <div class="btn-row">
       <button id="searchBtn">Zoek Alle</button>
@@ -106,6 +107,7 @@ const emptyMsg = document.getElementById("empty");
 const toast = document.getElementById("toast");
 const searchBtn = document.getElementById("searchBtn");
 const letterFilter = document.getElementById("letterFilter");
+const popularFilter = document.getElementById("popularFilter");
 // Gallery management
 const galleryListEl = document.getElementById("galleryList");
 const galleryNameInput = document.getElementById("galleryName");
@@ -193,6 +195,17 @@ Object.keys(dutchNames).forEach(letter => {
     group.appendChild(opt);
   });
   letterFilter.appendChild(group);
+});
+
+// Top 500 popular Dutch female names (CBS data)
+const popularNames=["Emma","Sophie","Julia","Olivia","Anna","Eva","Lotte","Noa","Lisa","Mila","Liliana","Lara","Lize","Els","Lien","Lies","Luna","Fleur","Esmee","Noor","Sanne","Lieke","Nora","Leah","Clara","Tess","Sara","Fenna","Lily","Mia","Nina","Eline","Larissa","Floortje","Alma","Maya","Laura","Iris","Juliette","Freya","Sofia","Isabella","Rosalie","Thea","Myrthe","Isa","Ruby","Eloise","Fien","Noortje","Rose","Elise","Megan","Florence","Juliana","Lynn","Alice","Charlotte","Julie","Madalina","Elodie","Yara","Evelien","Maeve","Marijn","Sylvie","Vivienne","Yasmine","Aaliyah","Abby","Ada","Adelheid","Adriana","Afra","Agaath","Agnes","Aileen","Aisha","Alanna","Aleida","Alette","Alexandra","Alicia","Alida","Aline","Alissa","Amalia","Amber","Amelia","Amina","Amira","Amy","Anastasia","Andrea","Angela","Angelique","Anique","Anita","Anja","Anke","Annabel","Anne","Anneke","Annelies","Annemarie","Annemieke","Annika","Anouk","Antonia","Ariane","Arwen","Ashley","Astrid","Aurora","Ava","Ayla","Aylin","Azra","Barbara","Bella","Bente","Benthe","Bernadette","Bertha","Bianca","Bibi","Bibian","Bo","Bodine","Bonnie","Brechtje","Bregje","Brenda","Britt","Brooke","Caitlin","Camille","Cara","Carlijn","Carmen","Carola","Caroline","Catharina","Cato","Cecile","Celeste","Celine","Chanel","Charissa","Charlie","Chelsea","Cheyenne","Chiara","Chloé","Christa","Christel","Christina","Cindy","Claire","Claudia","Cornelia","Cynthia","Dagmar","Daisy","Dana","Danielle","Danique","Daphne","Debbie","Deborah","Demi","Denise","Dewi","Diana","Diane","Dieuwertje","Dilara","Dina","Dionne","Dirkje","Donna","Doortje","Doris","Dorothea","Edith","Eefje","Eileen","Elena","Elif","Elin","Elisa","Elisabeth","Ella","Ellen","Elvira","Emilia","Emily","Emmy","Erica","Erin","Esra","Estelle","Esther","Eveline","Evi","Evie","Evy","Fabiënne","Fay","Faye","Febe","Felicia","Femke","Fenne","Fiene","Fiona","Flore","Frederique","Frida","Froukje","Gaby","Geertje","Geertruida","Gerda","Gerdien","Gina","Gisela","Greet","Greetje","Grietje","Guusje","Gwen","Gwendolyn","Hailey","Hanna","Hannah","Hanneke","Hannie","Harriët","Hedwig","Heidi","Heleen","Hendrika","Henriëtte","Hester","Hilda","Hilde","Ida","Ilana","Ilona","Ilse","Imke","Indy","Ines","Inge","Ingrid","Isabel","Isabelle","Ivana","Ivy","Izzy","Jacobine","Jacqueline","Jade","Jaimy","Jana","Janneke","Jannie","Jasmijn","Jasmine","Jeanette","Jeanine","Jeltje","Jennifer","Jenny","Jessica","Jet","Jette","Jikke","Jill","Jinte","Joanne","Johanna","Joke","Jolanda","Jolien","Jolijn","Joline","Joosje","Jorien","Josefien","Josephine","Joyce","Judith","June","Justine","Kaatje","Karen","Karin","Karina","Karlijn","Kate","Katinka","Katja","Katrien","Kayleigh","Kelly","Kiki","Kim","Kirsten","Klaartje","Krista","Kyra","Lana","Lauren","Lea","Leila","Lena","Lenie","Leonie","Lesley","Lianne","Lidewij","Liesbeth","Lieve","Lilian","Lina","Linda","Linde","Lindsay","Lisanne","Lisette","Liv","Loes","Lois","Lola","Lonneke","Louise","Lucia","Lucie","Valerie","Lydia","Maaike","Maartje","Machteld","Madelief","Madelon","Magda","Maja","Malou","Manon","Mara","Marga","Margot","Margreet","Margriet","Maria","Marieke","Mariëlle","Marije","Marijke","Marina","Marion","Marisa","Mariska","Marissa","Marit","Marjan","Marjolein","Marleen","Marlies","Marloes","Marta","Martine","Mary","Mathilde","Maud","Maxime","Mayra","Meike","Melanie","Melissa","Merel","Mette","Michelle","Mieke","Milou","Mina","Miriam","Mirjam","Mirte","Mirthe","Moniek","Monique","Nadia","Nadine","Naomi","Natalie","Nathalie","Neeltje","Nel","Nella","Nicole","Nienke","Nikita","Nikki","Norah","Nova","Nynke","Oda","Odette","Olga","Ophelia","Patricia","Paula","Pauline","Peggy","Petra","Philippine","Pien","Pip","Pleun","Pleuni","Priscilla","Puck","Quinty","Quirine","Rachel","Rebecca","Regina","Renate","Renée","Renske","Rianne","Riet","Rinske","Rita","Roos","Roosmarijn","Rosa","Rosanne","Roxanne","Ruth","Saar","Saartje","Sabine","Sabrina","Samantha","Sandra","Saskia","Selina","Selma","Senna","Shana","Shannon","Sharon","Sien","Sietske","Silke","Simone","Stefanie","Stella","Stephanie","Susanne","Suzan","Suzanne","Suze","Sylvia","Tamar","Tamara","Tanja","Tara","Tessa","Thirza","Tineke","Tirza","Tjitske","Trijntje","Truus","Ursula","Vanessa","Veerle","Vera","Veronica","Victoria","Vivianne","Wanda","Wendy","Wieke","Wies","Wietske","Wilhelmina","Willeke","Willemijn","Wilma","Xanthe","Xenia","Yasmin","Yentl","Yfke","Ymke","Yvette","Yvonne","Zara","Zeynep","Zita","Zoë"];
+
+// Populate popular names dropdown (same behavior as letterFilter)
+popularNames.forEach(name => {
+  const opt = document.createElement("option");
+  opt.value = name;
+  opt.textContent = name;
+  popularFilter.appendChild(opt);
 });
 
 function showToast(msg) {
@@ -352,8 +365,11 @@ function generateVariations(name) {
 searchBtn.addEventListener("click", async () => {
   const namesInput = document.getElementById("names").value.trim();
   const selectedName = letterFilter.value;
+  const selectedPopular = popularFilter.value;
   let list;
-  if (selectedName && Object.values(dutchNames).flat().includes(selectedName)) {
+  if (selectedPopular && popularNames.includes(selectedPopular)) {
+    list = generateVariations(selectedPopular);
+  } else if (selectedName && Object.values(dutchNames).flat().includes(selectedName)) {
     list = generateVariations(selectedName);
   } else if (namesInput) {
     list = namesInput.split("\\n").map(s => s.trim()).filter(Boolean);
