@@ -137,6 +137,22 @@ function renderGalleryList() {
   chip.innerHTML = "<span>" + currentName + " (" + currentCount + ")</span>";
   if (currentGalleryKey !== "__current__") {
     chip.innerHTML += '<span class="del" data-key="' + currentGalleryKey + '">✕</span>';
+    chip.addEventListener("click", function(e) {
+      if (e.target.classList.contains("del")) {
+        e.stopPropagation();
+        const dk = e.target.getAttribute("data-key");
+        localStorage.removeItem("wf_" + dk);
+        delete galleries[dk];
+        saveGalleriesMeta();
+        currentGalleryKey = "__current__";
+        localStorage.setItem("wf_current_gallery", "__current__");
+        history = [];
+        renderGallery();
+        renderGalleryList();
+        showToast("Galerij verwijderd");
+        return;
+      }
+    });
   }
   galleryListEl.appendChild(chip);
   Object.keys(galleries).forEach(function(key) {
@@ -336,15 +352,9 @@ function generateVariations(name) {
 searchBtn.addEventListener("click", async () => {
   const namesInput = document.getElementById("names").value.trim();
   const selectedName = letterFilter.value;
-  // If a name is selected from dropdown, generate variations
   let list;
-  if (selectedName && dutchNames) {
-    const allNames = Object.values(dutchNames).flat();
-    if (allNames.includes(selectedName)) {
-      list = generateVariations(selectedName);
-    } else {
-      list = generateVariations(selectedName);
-    }
+  if (selectedName && Object.values(dutchNames).flat().includes(selectedName)) {
+    list = generateVariations(selectedName);
   } else if (namesInput) {
     list = namesInput.split("\\n").map(s => s.trim()).filter(Boolean);
   } else {
@@ -353,21 +363,35 @@ searchBtn.addEventListener("click", async () => {
   }
   searchBtn.disabled = true;
   searchBtn.textContent = "Zoek " + list.length + " namen…";
-  let found = 0, tooOld = 0, notFound = 0;
+  lastApiError = null;
+  const banner = document.getElementById("searchBanner");
+  banner.style.display = "none";
+  let found = 0, tooOld = 0, notFound = 0, apiErrors = 0;
   for (const name of list) {
     const result = await searchUser(name);
     if (result === 1) found++;
     else if (result === -1) tooOld++;
+    else if (result === -2) apiErrors++;
     else notFound++;
-    searchBtn.textContent = "Zoeken… (" + (found + tooOld + notFound) + "/" + list.length + ")";
+    searchBtn.textContent = "Zoeken… (" + (found + tooOld + notFound + apiErrors) + "/" + list.length + ")";
   }
   renderGallery();
   searchBtn.disabled = false;
   searchBtn.textContent = "Zoek Alle";
-  let msg = found + " gevonden";
-  if (tooOld) msg += ", " + tooOld + " te oud";
-  if (notFound) msg += ", " + notFound + " niet gevonden";
-  showToast(msg);
+  // Show persistent banner — stays until next search
+  banner.style.display = "flex";
+  if (apiErrors > 0) {
+    banner.className = "search-banner err";
+    banner.innerHTML = '<span class="stat">' + found + ' gevonden</span>' +
+      (tooOld ? '<span class="stat">' + tooOld + ' te oud</span>' : '') +
+      (notFound ? '<span class="stat">' + notFound + ' niet gevonden</span>' : '') +
+      '<span class="stat" style="color:#b71c1c">⚠ ' + apiErrors + ' API fout' + (apiErrors > 1 ? "en" : "") + (lastApiError ? ': ' + lastApiError : "") + '</span>';
+  } else {
+    banner.className = "search-banner ok";
+    banner.innerHTML = '<span class="stat">' + found + ' gevonden</span>' +
+      (tooOld ? '<span class="stat">' + tooOld + ' te oud</span>' : '') +
+      (notFound ? '<span class="stat">' + notFound + ' niet gevonden</span>' : '');
+  }
 });
 
 letterFilter.addEventListener("change", renderGallery);
