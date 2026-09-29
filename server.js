@@ -372,23 +372,23 @@ async function searchUser(username) {
 
 function generateVariations(name) {
   const variations = new Set();
+  const separators = ["", " ", "_", "#", "-"];
   // Base name
   variations.add(name);
-  // Years 1971-1985 (with and without space)
+  // Trailing underscore
+  variations.add(name + "_");
+  // Years 1971-1985
   for (let year = 1971; year <= 1985; year++) {
-    variations.add(name + year);
-    variations.add(name + " " + year);
+    for (const sep of separators) variations.add(name + sep + year);
   }
-  // Single digits 0-9 (with and without space)
+  // Single digits 0-9
   for (let d = 0; d <= 9; d++) {
-    variations.add(name + d);
-    variations.add(name + " " + d);
+    for (const sep of separators) variations.add(name + sep + d);
   }
-  // Sequential numbers: 1, 12, 123, 1234, 12345 (with and without space)
+  // Sequential numbers: 1, 12, 123, 1234, 12345
   const seqNums = [1, 12, 123, 1234, 12345];
   for (const n of seqNums) {
-    variations.add(name + n);
-    variations.add(name + " " + n);
+    for (const sep of separators) variations.add(name + sep + n);
   }
   return Array.from(variations);
 }
