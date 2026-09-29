@@ -36,6 +36,11 @@ const HTML = `<!DOCTYPE html>
   .card .remove-btn{position:absolute;top:8px;right:8px;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;border:none;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s,background .2s}
   .card:hover .remove-btn{opacity:1}
   .card .remove-btn:hover{background:rgba(231,76,60,.9)}
+  .card .invite-btn{position:absolute;top:8px;left:8px;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);color:#555;border:1px solid #ddd;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:4px;opacity:0;transition:opacity .2s,background .2s,color .2s}
+  .card:hover .invite-btn{opacity:1}
+  .card .invite-btn:hover{background:rgba(76,175,80,.12)}
+  .card .invite-btn.invited{background:rgba(76,175,80,.15);color:#2e7d32;border-color:#4caf50;opacity:1}
+  .card.invited{border:2px solid #4caf50}
   .card img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block}
   .card .info{padding:1rem}
   .card .name{font-size:1.1rem;font-weight:700;margin-bottom:.25rem}
@@ -121,6 +126,9 @@ function saveCurrentGallery() {
   galleries[currentGalleryKey].updated = Date.now();
   saveGalleriesMeta();
 }
+// Invited tracking (global across all galleries)
+let invitedSet = new Set(JSON.parse(localStorage.getItem("wf_invited") || "[]"));
+function saveInvited() { localStorage.setItem("wf_invited", JSON.stringify([...invitedSet])); }
 function loadCurrentGallery() { history = JSON.parse(localStorage.getItem("wf_" + currentGalleryKey) || "[]"); }
 function setCurrentGallery(key) {
   saveCurrentGallery();
@@ -236,11 +244,16 @@ function formatDate(ts) {
 
 function renderCard(user) {
   const card = document.createElement("div");
-  card.className = "card";
+  card.className = "card" + (invitedSet.has(user.id) ? " invited" : "");
   const btn = document.createElement("button");
   btn.className = "remove-btn";
   btn.textContent = "✕";
   btn.onclick = () => removeUser(user.id, card);
+  const inviteBtn = document.createElement("button");
+  inviteBtn.className = "invite-btn" + (invitedSet.has(user.id) ? " invited" : "");
+  inviteBtn.textContent = invitedSet.has(user.id) ? "✓ Uitgenodigd" : "📨";
+  inviteBtn.title = invitedSet.has(user.id) ? "Uitgenodigd" : "Markeer als uitgenodigd";
+  inviteBtn.onclick = () => toggleInvite(user.id, card, inviteBtn);
   card.innerHTML =
     '<img src="/avatar/' + user.id + '" alt="' + user.username + '" />' +
     '<div class="info">' +
@@ -250,6 +263,7 @@ function renderCard(user) {
     '<div class="date">Sinds ' + formatDate(user.created) + '</div>' +
     '</div>';
   card.insertBefore(btn, card.firstChild);
+  card.insertBefore(inviteBtn, card.childNodes[1]);
   const img = card.querySelector("img");
   img.onerror = function() {
     this.src = "data:image/svg+xml," + encodeURIComponent(
@@ -258,6 +272,23 @@ function renderCard(user) {
       '<text x="128" y="140" text-anchor="middle" font-size="40" fill="#bbb">?</text></svg>');
   };
   return card;
+}
+
+function toggleInvite(userId, card, btn) {
+  if (invitedSet.has(userId)) {
+    invitedSet.delete(userId);
+    card.classList.remove("invited");
+    btn.classList.remove("invited");
+    btn.textContent = "📨";
+    btn.title = "Markeer als uitgenodigd";
+  } else {
+    invitedSet.add(userId);
+    card.classList.add("invited");
+    btn.classList.add("invited");
+    btn.textContent = "✓ Uitgenodigd";
+    btn.title = "Uitgenodigd";
+  }
+  saveInvited();
 }
 
 function removeUser(userId, card) {
