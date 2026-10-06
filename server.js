@@ -160,10 +160,15 @@ function saveCurrentGallery() {
 let invitedSet = new Set(JSON.parse(localStorage.getItem("wf_invited") || "[]"));
 let searchedSet = new Set(JSON.parse(localStorage.getItem("wf_searched") || "[]"));
 function saveSearched() { localStorage.setItem("wf_searched", JSON.stringify(Array.from(searchedSet))); }
-function normName(s) { return (s || "").trim().toLowerCase().replace(/\s+/g, " "); }
-// Usernames of gallery entries marked "uitgenodigd" (invitedSet stores user IDs).
-// Rebuilt whenever history or invite state changes so menus/cards can mark them red.
-let invitedNames = new Set();
+function normName(s) { return (s || "").trim().toLowerCase().replace(/\\s+/g, " "); }
+// Base names of every player already saved in ANY gallery. These are the people
+// you've already found, so menus mark them red. Rebuilt whenever a gallery changes.
+let knownNames = new Set();
+// A found username is its base plus a variation suffix (emma1978, emma_7, emma 12).
+// Strip that trailing suffix to recover the base name the menus show.
+function baseNameOf(username) {
+  return normName(username).replace(/[_\\s\\-]*\\d{1,5}$/, "").trim();
+}
 function rebuildInvitedNames() {
   const s = new Set();
   for (let i = 0; i < localStorage.length; i++) {
@@ -171,15 +176,18 @@ function rebuildInvitedNames() {
     if (k && k.indexOf("wf_") === 0 && k !== "wf_invited" && k !== "wf_searched" && k !== "wf_galleries" && k !== "wf_current_gallery") {
       let arr;
       try { arr = JSON.parse(localStorage.getItem(k) || "[]"); } catch (e) { continue; }
-      for (const u of arr) if (u && invitedSet.has(u.id)) s.add(normName(u.username));
+      for (const u of arr) if (u && u.username) {
+        const b = baseNameOf(u.username);
+        if (b) s.add(b);
+      }
     }
   }
-  invitedNames = s;
+  knownNames = s;
 }
 function isMarked(name) {
   const n = normName(name);
   if (!n) return false;
-  return searchedSet.has(n) || invitedNames.has(n);
+  return searchedSet.has(n) || knownNames.has(n);
 }
 function saveInvited() {
   localStorage.setItem("wf_invited", JSON.stringify([...invitedSet]));
@@ -237,6 +245,8 @@ function renderGalleryList() {
         localStorage.removeItem("wf_" + dk);
         delete galleries[dk];
         saveGalleriesMeta();
+        rebuildInvitedNames();
+        markMenuOptions();
         renderGalleryList();
         showToast("Galerij verwijderd");
         return;
@@ -364,7 +374,10 @@ class CustomDropdown {
     this.list.addEventListener("scroll", () => {});
   }
 }
-document.addEventListener("click", () => {
+document.addEventListener("click", e => {
+  // Only close when the click is truly outside a dropdown; typing in the
+  // filter box or clicking an item must not dismiss the menu.
+  if (e.target && e.target.closest && e.target.closest(".cdd")) return;
   document.querySelectorAll(".cdd.open").forEach(el => { el.classList.remove("open"); const p = el.querySelector(".cdd-panel"); if (p) p.hidden = true; });
 });
 
