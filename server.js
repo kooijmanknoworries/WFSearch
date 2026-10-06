@@ -520,8 +520,7 @@ function login() {
 
 loginPromise = login().catch(() => null);
 
-// Rate limiting state
-let recentRequests = [];
+
 
 const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -566,16 +565,6 @@ const server = http.createServer(async (req, res) => {
         sessionCookie = await loginPromise;
       }
       if (!sessionCookie) throw new Error("Failed to authenticate with WordFeud API");
-
-      // Rate limiter: max 5 requests per 10 seconds to avoid IP ban
-      const now = Date.now();
-      recentRequests = recentRequests.filter(t => now - t < 10000);
-      if (recentRequests.length >= 5) {
-        const oldest = recentRequests[0];
-        const wait = 10000 - (now - oldest) + 500;
-        await new Promise(r => setTimeout(r, wait));
-      }
-      recentRequests.push(Date.now());
 
       async function apiFetch(url, options) {
         let retries = 0;
