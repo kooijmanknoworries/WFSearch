@@ -44,6 +44,7 @@ const HTML = `<!DOCTYPE html>
   .card img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block}
   .card .info{padding:1rem}
   .card .name{font-size:1.1rem;font-weight:700;margin-bottom:.25rem}
+  .card .name.searched{color:#e74c3c}
   .card .id{color:#888;font-size:.8rem}
   .card .age{color:#4a4;font-size:.85rem;margin-top:.35rem;font-weight:600}
   .card .date{color:#999;font-size:.75rem;margin-top:.25rem}
@@ -128,6 +129,8 @@ function saveCurrentGallery() {
 }
 // Invited tracking (global across all galleries)
 let invitedSet = new Set(JSON.parse(localStorage.getItem("wf_invited") || "[]"));
+let searchedSet = new Set(JSON.parse(localStorage.getItem("wf_searched") || "[]"));
+function saveSearched() { localStorage.setItem("wf_searched", JSON.stringify(Array.from(searchedSet))); }
 function saveInvited() { localStorage.setItem("wf_invited", JSON.stringify([...invitedSet])); }
 function loadCurrentGallery() { history = JSON.parse(localStorage.getItem("wf_" + currentGalleryKey) || "[]"); }
 function setCurrentGallery(key) {
@@ -257,7 +260,7 @@ function renderCard(user) {
   card.innerHTML =
     '<img src="/avatar/' + user.id + '" alt="' + user.username + '" />' +
     '<div class="info">' +
-    '<div class="name">' + user.username + '</div>' +
+    '<div class="name' + (searchedSet.has(user.username) ? ' searched' : '') + '">' + user.username + '</div>' +
     '<div class="id">ID: ' + user.id + '</div>' +
     '<div class="age">' + formatAge(user.created) + '</div>' +
     '<div class="date">Sinds ' + formatDate(user.created) + '</div>' +
@@ -359,6 +362,8 @@ async function searchUser(username) {
           history.push(u);
           saveCurrentGallery();
         }
+        searchedSet.add(u.username);
+        saveSearched();
         return 1;
       }
       return -1;
