@@ -29,3 +29,17 @@ docker compose -f compose.selfhost.yaml up -d --build
 
 `restart: unless-stopped` + Docker/Caddy being `systemctl enable`d means the container
 comes back automatically after a reboot (and Docker restarts it if it crashes).
+
+## Gotcha: backslashes in the inlined HTML
+
+The entire browser app (CSS + JS) is inlined in `server.js` inside one template
+literal. Inside a template literal, a backslash in front of an unrecognized
+character is **silently dropped**. So a single backslash in `normName`'s regex
+`/\s+/g` would be served to the browser as `/s+/g`, which eats the letter "s"
+out of every name. The source file therefore carries a **doubled** backslash for
+every regex metacharacter that must reach the browser (`\\s`, `\\d`, `\\-`, `\\n`),
+and the served HTML then contains a single backslash as intended.
+
+Symptom of a regression: the filter bar finds nothing for names containing "s"
+(typing "samantha" shows "amatha"). Always verify the *served* HTML — `curl` the
+running app and grep the regex — never trust the source file alone.
