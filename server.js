@@ -20,8 +20,21 @@ const HTML = `<!DOCTYPE html>
   textarea{width:100%;height:120px;padding:.75rem 1rem;border:2px solid #dde;border-radius:8px;font-size:1rem;font-family:inherit;outline:none;resize:vertical;transition:border .2s}
   textarea:focus{border-color:#5b5}
   .select-row{display:flex;gap:.75rem;margin-top:.75rem;margin-bottom:.75rem}
-  select{flex:1;padding:.75rem;border:2px solid #dde;border-radius:8px;font-size:1rem;font-family:inherit;background:#fff;cursor:pointer}
-  select:focus{border-color:#5b5;outline:none}
+  .cdd{flex:1;position:relative}
+  .cdd-btn{padding:.75rem;border:2px solid #dde;border-radius:8px;font-size:1rem;font-family:inherit;background:#fff;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:.5rem}
+  .cdd.open .cdd-btn,.cdd-btn:focus{border-color:#5b5;outline:none}
+  .cdd-btn .cdd-label{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#333}
+  .cdd-btn .cdd-label.placeholder{color:#999}
+  .cdd-btn .cdd-caret{color:#888;font-size:.8rem}
+  .cdd-panel{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:2px solid #dde;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:60;max-height:360px;display:flex;flex-direction:column;overflow:hidden}
+  .cdd-panel[hidden]{display:none!important}
+  .cdd-search-wrap{padding:.5rem;border-bottom:1px solid #eee}
+  .cdd-search{width:100%;box-sizing:border-box;padding:.5rem .6rem;border:1px solid #dde;border-radius:6px;font-size:.9rem;font-family:inherit;outline:none}
+  .cdd-search:focus{border-color:#5b5}
+  .cdd-list{overflow-y:auto;max-height:300px;padding:.25rem 0}
+  .cdd-group{padding:.45rem .9rem .2rem;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#999;position:sticky;top:0;background:#fff}
+  .cdd-item{padding:.45rem .9rem;font-size:.95rem;cursor:pointer;color:#333}
+  .cdd-item:hover{background:#f2f8f2}
   .btn-row{display:flex;gap:.75rem}
   button{flex:1;padding:.75rem;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;transition:background .2s}
   #searchBtn{background:#4a4;color:#fff}
@@ -45,7 +58,7 @@ const HTML = `<!DOCTYPE html>
   .card .info{padding:1rem}
   .card .name{font-size:1.1rem;font-weight:700;margin-bottom:.25rem}
   .card .name.searched{color:#e74c3c}
-  option.searched{color:#e74c3c;font-weight:600}
+  .cdd-item.searched{color:#e74c3c;font-weight:600}
   .lookup-bar{margin-top:.5rem;padding:.4rem .7rem;border-radius:6px;font-size:.85rem;display:flex;align-items:center;gap:.4rem;background:#eef;color:#335}
   .lookup-bar .mark{font-size:1rem}
   .card .id{color:#888;font-size:.8rem}
@@ -83,8 +96,20 @@ const HTML = `<!DOCTYPE html>
   <div class="search-box">
     <textarea id="names" placeholder="Plak namen hier (één per regel)&#10;bijv.&#10;Nico&#10;Suus1978&#10;Player123"></textarea>
     <div class="select-row">
-      <select id="letterFilter"><option value="">Alle letters</option></select>
-      <select id="popularFilter"><option value="">Populaire namen (top 500)</option></select>
+      <div class="cdd" id="letterFilter">
+        <div class="cdd-btn"><span class="cdd-label placeholder">Alle letters</span><span class="cdd-caret">▾</span></div>
+        <div class="cdd-panel" hidden>
+          <div class="cdd-search-wrap"><input class="cdd-search" placeholder="Filter namen..." /></div>
+          <div class="cdd-list"></div>
+        </div>
+      </div>
+      <div class="cdd" id="popularFilter">
+        <div class="cdd-btn"><span class="cdd-label placeholder">Populaire namen (top 500)</span><span class="cdd-caret">▾</span></div>
+        <div class="cdd-panel" hidden>
+          <div class="cdd-search-wrap"><input class="cdd-search" placeholder="Filter namen..." /></div>
+          <div class="cdd-list"></div>
+        </div>
+      </div>
     </div>
     <div class="lookup-bar" id="lookupBar" style="display:none"></div>
     <div class="btn-row">
@@ -116,8 +141,6 @@ const stats = document.getElementById("stats");
 const emptyMsg = document.getElementById("empty");
 const toast = document.getElementById("toast");
 const searchBtn = document.getElementById("searchBtn");
-const letterFilter = document.getElementById("letterFilter");
-const popularFilter = document.getElementById("popularFilter");
 // Gallery management
 const galleryListEl = document.getElementById("galleryList");
 const galleryNameInput = document.getElementById("galleryName");
@@ -229,55 +252,135 @@ loadCurrentGallery();
 
 const dutchNames = {A:["Aafke", "Aagje", "Aaisey", "Aaltje", "Abby", "Ada", "Adagonda", "Adèle", "Adelheid", "Adeline", "Adelmund", "Adoree", "Adriënne", "Aemke", "Afelien", "Afra", "Aga", "Agaat", "Ageeth", "Aggy", "Aïcha", "Aïda", "Aiko", "Aily", "Aimée", "Aimy", "Ainoa", "Airlie", "Aisha", "Aiva", "Akelei", "Akke", "Akkelyn", "Alaia", "Alana", "Alaska", "Alba", "Albertine", "Aleid", "Aleida", "Aletta", "Alexa", "Alice", "Alie", "Alieke", "Alies", "Alivia", "Alix", "Alky", "Ally", "Alma", "Alouette", "Alyna", "Alyssa", "Amalia", "Amanda", "Amandine", "Amaury", "Amber", "Amberly", "Amelia", "Amélie", "Amely", "Amira", "Amra", "Amy", "Amy-Linn", "Ana", "Anaïs", "Andrea", "Andrée", "Andrieske", "Anemoon", "Angrée", "Anic", "Aniek", "Anje", "Anke", "Ankie", "Ankje", "Ann", "Anna", "Annabel", "Annalies", "Anne", "Annebel", "Annechien", "Annefleur", "Annejet", "Anne-Lieke", "Annelien", "Annelies", "Annelijn", "Anneloes", "Annelotte", "Anne-Lou", "Anne-marie", "Annemarieke", "Annemarije", "Anne-marije", "Annemarijn", "Annemiek", "Annemieke", "Annemijn", "Annerieke", "Anneska", "Annetje", "Annick", "Anny", "Anoek", "Anouk", "Ans", "Antje", "Aphrodite", "April", "Arenda", "Arianna", "Arieke", "Arjenne", "Arlette", "Aspen", "Aster", "Astrid", "Ata", "Aty", "Aukje", "Aurelia", "Aurélie", "Aurora", "Autumn", "Ava", "Avelin", "Aven", "Axelle", "Aya", "Ayla", "Aylin", "Ayska"],B:["Babbe", "Babette", "Babice", "Babs", "Baiba", "Barbara", "Bartina", "Bartje", "Baukelien", "Bea", "Beata", "Beate", "Beatrijs", "Beau", "Beaudine", "Beertje", "Belezza", "Belia", "Bella", "Belle", "Bente", "Bep", "Berbel", "Berber", "Berdien", "Bernadette", "Bernice", "Bernou", "Beryl", "Bess", "Beth", "Betsie", "Betsy", "Bettelien", "Bettine", "Betty-Sue", "Bianca", "Bibelotte", "Bibi", "Bibian", "Bila", "Billy", "Birger", "Birgit", "Birte", "Birthe", "Blizz", "Bloem", "Blossom", "Bo", "Bobbie", "Bobby", "Bodil", "Bodine", "Bonita", "Bowi", "Bracha", "Bre", "Brechje", "Brechtje", "Breeze", "Bregje", "Bregtje", "Brisa", "Britt", "Britte", "Brooklyn", "Brynn"],C:["Camille", "Cara", "Carice", "Carine", "Carlijn", "Carlijne", "Carlotta", "Carly", "Carmen", "Caro", "Carolien", "Carolijn", "Carys", "Casja", "Catelijn", "Catelijne", "Cathalijne", "Catharijne", "Cathelijn", "Cathelijne", "Cathleen", "Cato", "Catootje", "Ceci", "Cecile", "Cécilia", "Celeste", "Celine", "Cellistine", "Ceylin", "Chaja", "Chanel", "Chao", "Charlie", "Charu", "Chava", "Chibi", "Chireny", "Chloe", "Chrisje", "Christa", "Cicely", "Cilia", "Cilla", "Cilou", "Cisca", "Cita", "Claartje", "Claire", "Clara", "Clarisse", "Clary", "Clea", "Cleo", "Coby", "Colinda", "Coos", "Coosje", "Cor", "Cora", "Cornelieke", "Curille", "Cynthia"],D:["Dani", "Dalenne", "Dana", "Danae", "Dané", "Daniek", "Daniëlle", "Danique", "Daphne", "Date", "Davida", "Deborah", "Deenie", "Delphine", "Demi", "Denise", "Dessa", "Detje", "Deva", "Dewi", "Didy", "Diede", "Dieneke", "Dienke", "Dieuwertje", "Dimphy", "Dineke", "Dionne", "Dirckje", "Dirkje", "Dirre", "Ditte", "Diva", "Doeschka", "Dokus", "Dominique", "Door", "Doortje", "Dorende", "Dores", "Dorethé", "Doris", "Dorith", "Dorothea", "Dot", "Dottie", "Dounia", "Dounja", "Doutzen", "Duffy", "Dwarka", "Dymphy"],E:["Edie", "Edmée", "Eef", "Eefje", "Eefke", "Effie", "Egi", "Ela", "Elea", "Electra", "Elena", "Eleonora", "Elesta", "Elf", "Eliane", "Elieke", "Elin", "Eline", "Elisa", "Elise", "Elke", "Ella", "Elleke", "Ellemieke", "Ellemijn", "Ellen", "Ellerijn", "Elles", "Elly", "Ellineke", "Ellis", "Elmi", "Elodie", "Eloise", "Elsa / Elza", "Elsanne", "Elsbeth", "Else", "Elselien", "Elsemiek", "Elsemieke", "Elske", "Elzelien", "Em", "Emae", "Emanuelle", "Emi", "Emily", "Emma", "Emmarie", "Emmeke", "Emmelieke", "Emmelien", "Emy", "Enith", "Era", "Esmee", "Esra", "Estee", "Esther", "Eva", "Evangeline", "Evelien", "Evelijn", "Evelina", "Evi", "Evie"],F:["Fabienne", "Fae", "Faline", "Famke", "Faquita", "Fara", "Fardau", "Fay", "Faye", "Fee", "Felin", "Féliz", "Fem", "Femi", "Femke", "Fenna", "Fenne", "Fenneke", "Fiebe", "Fieke", "Fien", "Fiene", "Fientje", "Fiep", "Fiet", "Filippa", "Finelie", "Fiona", "Fiore", "Fleur", "Fleurtje", "Flin", "Flo", "Floor", "Floortje", "Flore", "Florence", "Floresté", "Florice", "Florieke", "Florine", "Fran", "Francis", "Francine", "Frauke", "Frederike", "Fredérique", "Frenchy", "Freya", "Frida", "Froukje", "Gabi", "Gabriëlle", "Gaby", "Gaia", "Gayatri", "Geena", "Geerke", "Geerte", "Geertje", "Geertrui", "Geertruida", "Geesje", "Geeske", "Geneviéve", "Geraldine", "Gerjanne", "Gerrieke", "Gerrita", "Gezina", "Gijsje", "Gilia", "Gina", "Gineke", "Ginger", "Ginie", "Gioia", "Gisela", "Giselle", "Gitta", "Gitte", "Gladys", "Godelieve", "Goedele", "Goeleke", "Golda", "Grace", "Greetje", "Greta", "Griet", "Grietje", "Guusje", "Gwen", "Gwendoline", "Gwenne", "Hailey", "Halo", "Hannah", "Hanne", "Hanneke", "Hansje", "Harleen", "Harmke", "Harper", "Harriette", "Hasse", "Hauke", "Haura", "Hava", "Havy", "Hayat", "Hayley", "Hazel", "Hazle", "Hea", "Heaven", "Hedwich", "Hedwig", "Heida", "Heidi", "Heike", "Heintje", "Heleen", "Héléna", "Hella", "Hendrieke", "Hendrika", "Hendrikje", "Hendrina", "Hera", "Hester", "Hetty", "Hilde", "Hildegard", "Hilgard", "Hilke", "Hilletje", "Hilly", "Hiske", "Holly", "Honey", "Honour", "Horacia", "Houkje", "Hulde", "Hyke"],I:["Ida", "Ieke", "Iemkje", "Ilja", "Ilona", "Ilse", "Imca", "Inde", "Indra", "Indy", "Ineke", "Ines", "Inge", "Ingeborg", "Ingelise", "Inia", "Inky", "Irine", "Iris", "Irma", "Irmgard", "Isa", "Ise", "Isis", "Isolde", "Itske", "Ivana", "Ivon", "Ivy", "Izem", "Izzy"],J:["Jace", "Jackie", "Jacobien", "Jacolien", "Jacoliene", "Jacomijn", "Jade", "Jana", "Janea", "Jane-Linn", "Janienke", "Janne", "Janneke", "Jannieke", "Jans", "Janske", "Jantien", "Jantina", "Jara", "Jasmijn", "Jasmin", "Jaylinn", "Jaynine", "Jazmin", "Jeanne", "Jefta", "Jeldau", "Jenneke", "Jenoa", "Jente", "Jeske", "Jess", "Jessie", "Jet", "Jetse", "Jetta", "Jette", "Jezzebelle", "Jikke", "Jill", "Jille", "Jinthe", "Jip", "Jiske", "Jitske", "Jitte", "Jo-Anne", "Jobke", "Jody", "Johanna", "Johanneke", "Jojanneke", "Jojo", "Joke", "Jolet", "Jolie", "Jolieke", "Jolien", "Jolijn", "Jonneke", "Joo", "Jools", "Joosje", "Jooske", "Jorie", "Jorieke", "Jos", "Josefien", "Josepha", "Josine", "Josje", "Jouke", "Joy", "Joya", "Joyann", "Joyce", "Juanita", "Judith", "Jule", "Julia", "Julie", "Juliënne", "Juliëtte", "Julinde", "Julinn", "June", "Juno", "Juulke", "Juultje"],K:["Kaat", "Kaate", "Kaatje", "Kady", "Kaeley", "Kaia", "Kalie", "Kara", "Karen", "Karina", "Karlien", "Karlijn", "Kate", "Katelijn", "Katniss", "Kato", "Katrien", "Katrijn", "Kaya", "Kayla", "Kaylee", "Kaylen", "Kaylinn", "Keesie", "Keet", "Keetje", "Keisha", "Keja", "Kelly", "Kelsey", "Kendra", "Kennedy", "Kensi", "Kerstin", "Khloé", "Kia", "Kiara", "Kickel", "Kiek", "Kiekie", "Kiki", "Kim", "Kimber", "Kimberley", "Kimé", "Kirsten", "Kjenta", "Klaartje", "Klaasje", "Klaske", "Klazina", "Koosje", "Kourtney", "Kris", "Krisje", "Kristie", "Kristien", "Kyara", "Kylie", "Kyra"],L:["Lana", "Lara", "Lauke", "Laura", "Lauren", "Laurie", "Laurien", "Layla", "Lea", "Leah", "Leandra", "Leentje", "Lena", "Lenneke", "Lenore", "Lente", "Leoba", "Léona", "Leonieke", "Leontien", "Leslie", "Letje", "Lette", "Lexi", "Lia", "Liane", "Lianne", "Lida", "Lidewij", "Lidia", "Lieke", "Liene", "Lieneke", "Lienke", "Lies", "Liesbeth", "Liese", "Lieske", "Lieve", "Lieveke", "Liliane", "Lilianne", "Lilly", "Limare", "Lina", "Linde", "Lineke", "Linn", "Linneke", "Lis", "Lisa", "Lisa-Marie", "Lise", "Lisea", "Liselot", "Lissy", "Lita", "Liv", "Liva", "Livay", "Livia", "Liz", "Liza", "Lize", "Lizee", "Lizet", "Lizz", "Lizzy", "Loalis", "Loe", "Loekie", "Loes", "Loesje", "Loga", "Lois", "Loiza", "Lola", "Lolly", "Lolo", "Lolu", "London", "Lonne", "Lonneke", "Lore", "Lorelay", "Loren", "Lori", "Lorijn", "Lotje", "Lotte", "Lotus", "Lou", "Loua", "Louise", "Loukie", "Loulou", "Lovie", "Lowieke", "Luana", "Lucie", "Lucy", "Lula", "Lulu", "Lumen", "Lumi", "Luna", "Luus", "Lux", "Lydia", "Lydie", "Lymée", "Lynn", "Lysbet", "Lyse", "Lyssa"],M:["Maaike", "Maan", "Maartje", "Maayke", "Machteld", "Madeleine", "Madelief", "Madelien", "Madelon", "Mae", "Maecy", "Maerle", "Magdalena", "Maie", "Maike", "Maja", "Malak", "Malin", "Malinda", "Mallory", "Malou", "Mare", "Mareike", "Maren", "Margje", "Margo", "Margot", "Margreet", "Margriet", "Maria", "Maribel", "Marie", "Marieke", "Marietje", "Marij", "Marija", "Marije", "Marijke", "Marijne", "Marijntje", "Marijse", "Marike", "Marinke", "Marit", "Marité", "Marjella", "Marjet", "Marjolein", "Marjoleine", "Marjolijn", "Marjonne", "Marley", "Marlieke", "Marlien", "Marlies", "Marlijn", "Marlijne", "Marloe", "Marloeke", "Marloes", "Marlotte", "Marni", "Marrigje", "Marthe", "Martine", "Martje", "Marysa", "Maryse", "Mascha", "Mathilde", "Matilda", "Matise", "Matje", "Maud", "Maureen", "Max", "Maxe", "May", "Maya", "Mayke", "Mayra", "Mechi", "Mechteld", "Megan", "Meike", "Meinke", "Merel", "Merete", "Merit", "Merle", "Metje", "Mette", "Michelle", "Michonne", "Mickey", "Miek", "Mieke", "Miep", "Mies", "Miesje", "Mignon", "Mijntje", "Mikky", "Mila", "Millie", "Milou", "Mimi", "Minke", "Minth", "Mirla", "Mirre", "Mirte", "Mitzi", "Mitzy", "Mona", "Moon", "Mouna", "Myra", "Myrthe", "Myrtille"],N:["Nya", "Nadya", "Naëma", "Naeva", "Nanda", "Nanet", "Nanna", "Naomi", "Naouel", "Neele", "Neeltje", "Néla", "Nele", "Nelke", "Nella", "Nelleke", "Nicky", "Nicole", "Nieke", "Niene", "Nienke", "Nikki", "Nimfa", "Nina", "Nine", "Ninette", "Ninke", "Ninte", "Niqui", "Noa", "Noani", "Noëmi", "Noï", "Nola", "Noleste", "Noor", "Noortje", "Nora", "Nore", "Norna", "Novèn", "Nynke"],O:["Oceane", "Oda", "Ode", "Odet", "Odile", "Odilia", "Ofra", "Olda", "Olga", "Oliva", "Olivia", "Oona", "Oonah", "Ophra", "Otilia", "Ottelien", "Otteline", "Ottoline", "Oukje"],P:["Paarl", "Pam", "Pamela", "Paradis", "Parel", "Paris", "Pascale", "Patrice", "Paula", "Pauleen", "Paulien", "Paulies", "Pearl", "Pebble", "Pebbles", "Peggy", "Pemme", "Penélope", "Pennie", "Pepita", "Pepper", "Phebe", "Phemi", "Phileine", "Phine", "Pia", "Pieke", "Pien", "Pier", "Pieta", "Pieternel", "Pietje", "Pietsje", "Pink", "Pip", "Pippa", "Pixie", "Pleun", "Pleuni", "Pleunie", "Pleuntje", "Plien", "Polly", "Poppy", "Presley", "Primrose", "Puck", "Puk"],Q:["Qianne", "Qiara", "Qiyara", "Queenie", "Quérine", "Questa", "Querida", "Qiëlle", "Quinta", "Quintijn", "Quinty", "Quirine", "Quirijn", "Quita"],R:["Rachel", "Rana", "Raquel", "Rebecca", "Reina", "Remy", "Rena", "Renate", "Renske", "Resi", "Réva", "Rhodé", "Rhona", "Rianne", "Richelle", "Richtje", "Riemke", "Rieneke", "Rientje", "Riet", "Rifka", "Rifke", "Rina", "Rineke", "Rinoa", "Rinske", "Rita", "Robby", "Robijn", "Robin", "Robyn", "Roelfke", "Roelie", "Roelien", "Roelinde", "Roeline", "Rohdé", "Rolien", "Romée", "Romijn", "Romy", "Roos", "Roosje", "Roosmarieke", "Roosmarijn", "Rori", "Rosa", "Rosalie", "Rosan", "Rose", "Rosea", "Rosei", "Roselien", "Rosemarije", "Rosemarijn", "Rosemijn", "Rosy", "Rox", "Roxanne", "Rozei", "Rozemarijn", "Rozemijn", "Ruby", "Ruta"],S:["Saar", "Saartje", "Sabien", "Sacha", "Sadé", "Sadie", "Sallie", "Sally", "Salome", "Sam", "Samantha", "Sammy", "Sanna", "Sanne", "Sanne-Fleur", "Sanneke", "Sanne-Lynn", "Sara", "Sarah", "Sarah-Jane", "Sarah-Sue", "Sasja", "Sasse", "Savannah", "Scarlett", "Scotty", "Selah", "Selma", "Selwyn", "Semmie", "Senna", "Senne", "Seya", "Shadé", "Shae-Lee", "Shanti", "Shauni", "Shea", "Sheila", "Shirin", "Shirley", "Sibel", "Sibelle", "Sibrich", "Sien", "Sienna", "Sientje", "Sifra", "Signe", "Sigrid", "Sija", "Silke", "Silvana", "Silvie", "Simone", "Simonetta", "Sina", "Siona", "Siske", "Sissi", "Sita", "Sjaan", "Sjoke", "Sjoukje", "Sjuul", "Sjuulke", "Snoes", "Soete", "Sofie", "Sofieke", "Sofietje", "Solane", "Solange", "Solen", "Somer", "Soof", "Sophie", "Sophieke", "Soraya", "Spencer", "Spring", "Stans", "Starlet", "Stefanie", "Steffie", "Stella", "Sterre", "Stien", "Stientje", "Stijnie", "Stijntje", "Stine", "Sue", "Sue-Ann", "Summer", "Sun", "Susan", "Suus", "Suusje", "Suzanne", "Suze", "Suzette", "Suzy", "Swaan", "Swaentje", "Syenne", "Sylke", "Sylvi", "Sylvie", "Syne", "Synthy", "Syta"],T:["Tabitha", "Talitha", "Tamar", "Tamara", "Tammy", "Tanneke", "Tara", "Tarva", "Taryn", "Teddy", "Teile", "Teresa", "Terri", "Tess", "Tessel", "Teunie", "Teunieke", "Teuntje", "Thalise", "Thaxa", "Thea", "Thijn", "Thya", "Thyrza", "Tia", "Tiara", "Tiemke", "Tiki", "Tilde", "Tina", "Tine", "Tineke", "Tischka", "Titia", "Tiya", "To", "Toma", "Tomika", "Toos", "Trees", "Trienke", "Trijntje", "Trix", "Trixie", "Trudi", "Trui", "Trynke", "Tyra"],U:["Ubele", "Udine", "Ukje", "Ulla", "Ursa", "Ursela", "Ursina", "Ursula", "Utske", "Uzuri"],V:["Vai", "Valeia", "Valencia", "Valentina", "Valerie", "Vanessa", "Varsha", "Veerle", "Velité", "Venne", "Vera", "Vere", "Verena", "Verle", "Veroniek", "Veronique", "Vicky", "Vida", "Vieve", "Vikki", "Vinthe", "Viola", "Virginia", "Vivi", "Vivian", "Vivianne", "Vivy", "Vlinder", "Volente", "Vonne", "Vronie"],W:["Wanda", "Waylinn", "Weia", "Welmoed", "Wencke", "Wende", "Wendela", "Wendelien", "Wendy", "Wenthe", "Wenxi", "Wesselien", "Wia", "Wibbrichje", "Wibeke", "Wica", "Widia", "Wieke", "Wieneke", "Wiep", "Wies", "Wiesje", "Wieske", "Wiet", "Wieteke", "Wietse", "Wijnanda", "Willa", "Willeke", "Willemein", "Willemieke", "Willemien", "Willemijn", "Willow", "Wilna", "Wimke", "Winnie", "Wira", "Wiska", "Wouke", "Wren", "Wytske"],X:["Xaja", "Xandi", "Xandra", "Xanou", "Xanthe", "Xanti", "Xantippe", "Xari", "Xavi", "Xaviera", "Xavy", "Xeleste", "Xemme", "Xena", "Xeni", "Xenia", "Xenne", "Xevera", "Xia", "Xi-Anne", "Xilla", "Xixi", "Xophia", "Xummer", "Xyza"],Y:["Yael", "Yara", "Yasmijn", "Yasmine", "Ybeltje", "Yda", "Yeh", "Yenne", "Yentl", "Yfke", "Yin", "Yinte/Yinthe", "Yitte", "Yiyi", "Yke", "Yldou", "Ylonka", "Ylva", "Yma", "Ymke", "Yoa", "Yoëlla", "Yohanna", "Yohna", "Yoia", "Yoka", "Yolanthe", "Yolein", "Yolenthe", "Yolet", "Yora", "Youna", "Yovanka", "Yoyo", "Yris", "Yrsa", "Ysabel", "Yuli", "Yuna", "Yvanca", "Yvette", "Yvon"],Z:["Zwanet", "Zanea", "Zanee", "Zanna", "Zara", "Zaviera", "Zaza", "Zazi", "Zazie", "Zazou", "Zé", "Zeia", "Zela", "Zélia", "Zélie", "Zéressa", "Zesla", "Zeva", "Zézette", "Zina", "Zinnia", "Zinzi", "Zita", "Zöe", "Zoey", "Zoleste", "Zon", "Zona", "Zonne", "Zophie", "Zora", "Zoraya", "Zosha", "Zowy", "ZsaZsa", "Zsuzsu", "Zus", "Zusa", "Zuse", "Zuzanna", "Zwaan", "Zwaantje", "Zyna", "Zyra", "Zyva"]};
 
-Object.keys(dutchNames).forEach(letter => {
-  const group = document.createElement("optgroup");
-  group.label = letter + " (" + dutchNames[letter].length + ")";
-  dutchNames[letter].forEach(name => {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    opt.dataset.norm = normName(name);
-    group.appendChild(opt);
-  });
-  letterFilter.appendChild(group);
-});
-
 // Top 500 popular Dutch female names (CBS data)
 const popularNames=["Emma","Sophie","Julia","Olivia","Anna","Eva","Lotte","Noa","Lisa","Mila","Liliana","Lara","Lize","Els","Lien","Lies","Luna","Fleur","Esmee","Noor","Sanne","Lieke","Nora","Leah","Clara","Tess","Sara","Fenna","Lily","Mia","Nina","Eline","Larissa","Floortje","Alma","Maya","Laura","Iris","Juliette","Freya","Sofia","Isabella","Rosalie","Thea","Myrthe","Isa","Ruby","Eloise","Fien","Noortje","Rose","Elise","Megan","Florence","Juliana","Lynn","Alice","Charlotte","Julie","Madalina","Elodie","Yara","Evelien","Maeve","Marijn","Sylvie","Vivienne","Yasmine","Aaliyah","Abby","Ada","Adelheid","Adriana","Afra","Agaath","Agnes","Aileen","Aisha","Alanna","Aleida","Alette","Alexandra","Alicia","Alida","Aline","Alissa","Amalia","Amber","Amelia","Amina","Amira","Amy","Anastasia","Andrea","Angela","Angelique","Anique","Anita","Anja","Anke","Annabel","Anne","Anneke","Annelies","Annemarie","Annemieke","Annika","Anouk","Antonia","Ariane","Arwen","Ashley","Astrid","Aurora","Ava","Ayla","Aylin","Azra","Barbara","Bella","Bente","Benthe","Bernadette","Bertha","Bianca","Bibi","Bibian","Bo","Bodine","Bonnie","Brechtje","Bregje","Brenda","Britt","Brooke","Caitlin","Camille","Cara","Carlijn","Carmen","Carola","Caroline","Catharina","Cato","Cecile","Celeste","Celine","Chanel","Charissa","Charlie","Chelsea","Cheyenne","Chiara","Chloé","Christa","Christel","Christina","Cindy","Claire","Claudia","Cornelia","Cynthia","Dagmar","Daisy","Dana","Danielle","Danique","Daphne","Debbie","Deborah","Demi","Denise","Dewi","Diana","Diane","Dieuwertje","Dilara","Dina","Dionne","Dirkje","Donna","Doortje","Doris","Dorothea","Edith","Eefje","Eileen","Elena","Elif","Elin","Elisa","Elisabeth","Ella","Ellen","Elvira","Emilia","Emily","Emmy","Erica","Erin","Esra","Estelle","Esther","Eveline","Evi","Evie","Evy","Fabiënne","Fay","Faye","Febe","Felicia","Femke","Fenne","Fiene","Fiona","Flore","Frederique","Frida","Froukje","Gaby","Geertje","Geertruida","Gerda","Gerdien","Gina","Gisela","Greet","Greetje","Grietje","Guusje","Gwen","Gwendolyn","Hailey","Hanna","Hannah","Hanneke","Hannie","Harriët","Hedwig","Heidi","Heleen","Hendrika","Henriëtte","Hester","Hilda","Hilde","Ida","Ilana","Ilona","Ilse","Imke","Indy","Ines","Inge","Ingrid","Isabel","Isabelle","Ivana","Ivy","Izzy","Jacobine","Jacqueline","Jade","Jaimy","Jana","Janneke","Jannie","Jasmijn","Jasmine","Jeanette","Jeanine","Jeltje","Jennifer","Jenny","Jessica","Jet","Jette","Jikke","Jill","Jinte","Joanne","Johanna","Joke","Jolanda","Jolien","Jolijn","Joline","Joosje","Jorien","Josefien","Josephine","Joyce","Judith","June","Justine","Kaatje","Karen","Karin","Karina","Karlijn","Kate","Katinka","Katja","Katrien","Kayleigh","Kelly","Kiki","Kim","Kirsten","Klaartje","Krista","Kyra","Lana","Lauren","Lea","Leila","Lena","Lenie","Leonie","Lesley","Lianne","Lidewij","Liesbeth","Lieve","Lilian","Lina","Linda","Linde","Lindsay","Lisanne","Lisette","Liv","Loes","Lois","Lola","Lonneke","Louise","Lucia","Lucie","Valerie","Lydia","Maaike","Maartje","Machteld","Madelief","Madelon","Magda","Maja","Malou","Manon","Mara","Marga","Margot","Margreet","Margriet","Maria","Marieke","Mariëlle","Marije","Marijke","Marina","Marion","Marisa","Mariska","Marissa","Marit","Marjan","Marjolein","Marleen","Marlies","Marloes","Marta","Martine","Mary","Mathilde","Maud","Maxime","Mayra","Meike","Melanie","Melissa","Merel","Mette","Michelle","Mieke","Milou","Mina","Miriam","Mirjam","Mirte","Mirthe","Moniek","Monique","Nadia","Nadine","Naomi","Natalie","Nathalie","Neeltje","Nel","Nella","Nicole","Nienke","Nikita","Nikki","Norah","Nova","Nynke","Oda","Odette","Olga","Ophelia","Patricia","Paula","Pauline","Peggy","Petra","Philippine","Pien","Pip","Pleun","Pleuni","Priscilla","Puck","Quinty","Quirine","Rachel","Rebecca","Regina","Renate","Renée","Renske","Rianne","Riet","Rinske","Rita","Roos","Roosmarijn","Rosa","Rosanne","Roxanne","Ruth","Saar","Saartje","Sabine","Sabrina","Samantha","Sandra","Saskia","Selina","Selma","Senna","Shana","Shannon","Sharon","Sien","Sietske","Silke","Simone","Stefanie","Stella","Stephanie","Susanne","Suzan","Suzanne","Suze","Sylvia","Tamar","Tamara","Tanja","Tara","Tessa","Thirza","Tineke","Tirza","Tjitske","Trijntje","Truus","Ursula","Vanessa","Veerle","Vera","Veronica","Victoria","Vivianne","Wanda","Wendy","Wieke","Wies","Wietske","Wilhelmina","Willeke","Willemijn","Wilma","Xanthe","Xenia","Yasmin","Yentl","Yfke","Ymke","Yvette","Yvonne","Zara","Zeynep","Zita","Zoë"];
 
-// Populate popular names dropdown (same behavior as letterFilter)
-popularNames.forEach(name => {
-  const opt = document.createElement("option");
-  opt.value = name;
-  opt.textContent = name;
-  opt.dataset.norm = normName(name);
-  popularFilter.appendChild(opt);
-});
-
-// Mark dropdown options for names already searched or uitgenodigd.
-// Uses both a CSS class and a visible red-dot prefix (option color CSS is unreliable in
-// select elements across browsers). The option value is left untouched so search keeps working.
-function markMenuOptions() {
-  for (const opt of letterFilter.querySelectorAll("option")) {
-    const marked = isMarked(opt.value);
-    opt.classList.toggle("searched", marked);
-    const label = (marked ? "🔴 " : "") + opt.value;
-    if (opt.textContent !== label) opt.textContent = label;
-  }
-  for (const opt of popularFilter.querySelectorAll("option")) {
-    const marked = isMarked(opt.value);
-    opt.classList.toggle("searched", marked);
-    const label = (marked ? "🔴 " : "") + opt.value;
-    if (opt.textContent !== label) opt.textContent = label;
-  }
-}
-// Precomputed set of every name that appears in either dropdown (normalized)
-const menuNames = new Set([
-  ...letterFilter.querySelectorAll("option"),
-  ...popularFilter.querySelectorAll("option")
-].map(o => o.dataset.norm).filter(Boolean));
+// Precomputed set of every name that appears in either menu (normalized)
+const menuNames = new Set([...Object.values(dutchNames).flat(), ...popularNames].map(normName));
 function inMenu(name) {
   return menuNames.has(normName(name));
+}
+
+// Custom dropdown (replaces native <select>) so item text can be colored red.
+// Exposes .value and fires a "change" event so existing search/filter logic is untouched.
+class CustomDropdown {
+  constructor(root, placeholder, groups, opts) {
+    this.root = root;
+    this.btn = root.querySelector(".cdd-btn");
+    this.labelEl = root.querySelector(".cdd-label");
+    this.panel = root.querySelector(".cdd-panel");
+    this.search = root.querySelector(".cdd-search");
+    this.list = root.querySelector(".cdd-list");
+    this.placeholder = placeholder;
+    this.groups = groups;
+    this.value = "";
+    this.onChange = opts && opts.onChange || null;
+    this._filter = "";
+    this._itemEls = [];
+    this._renderAll();
+    this._bind();
+    this.refresh();
+  }
+  _renderAll() {
+    this.list.innerHTML = "";
+    this._itemEls = [];
+    const frag = document.createDocumentFragment();
+    this.groups.forEach(g => {
+      if (g.label) {
+        const h = document.createElement("div");
+        h.className = "cdd-group";
+        h.textContent = g.label;
+        frag.appendChild(h);
+      }
+      g.items.forEach(name => {
+        const it = document.createElement("div");
+        it.className = "cdd-item";
+        it.textContent = name;
+        it.dataset.norm = normName(name);
+        it.dataset.value = name;
+        it.addEventListener("click", () => this._select(name));
+        frag.appendChild(it);
+        this._itemEls.push(it);
+      });
+    });
+    this.list.appendChild(frag);
+  }
+  _select(name) {
+    if (name.indexOf("✕") === 0) { this._reset(); return; } // clear item
+    this.value = name;
+    this.labelEl.textContent = name;
+    this.labelEl.classList.remove("placeholder");
+    this._close();
+    if (this.onChange) this.onChange(name);
+    this.root.dispatchEvent(new Event("change"));
+  }
+  _reset() {
+    this.value = "";
+    this.labelEl.textContent = this.placeholder;
+    this.labelEl.classList.add("placeholder");
+    this._close();
+    this.root.dispatchEvent(new Event("change"));
+  }
+  _open() {
+    this.panel.hidden = false;
+    this.root.classList.add("open");
+    this._filter = "";
+    if (this.search) { this.search.value = ""; this._applyFilter(""); }
+    this.refresh();
+    if (this.search) setTimeout(() => this.search.focus(), 0);
+  }
+  _close() { this.panel.hidden = true; this.root.classList.remove("open"); }
+  _applyFilter(q) {
+    q = q.toLowerCase();
+    this._itemEls.forEach(el => {
+      const show = !q || el.dataset.norm.indexOf(q) !== -1;
+      el.style.display = show ? "" : "none";
+    });
+    this.list.querySelectorAll(".cdd-group").forEach(h => {
+      let n = h.nextElementSibling, any = false;
+      while (n && !n.classList.contains("cdd-group")) {
+        if (n.style.display !== "none") { any = true; break; }
+        n = n.nextElementSibling;
+      }
+      h.style.display = any ? "" : "none";
+    });
+  }
+  refresh() {
+    this._itemEls.forEach(el => el.classList.toggle("searched", isMarked(el.dataset.value)));
+  }
+  _bind() {
+    this.btn.addEventListener("click", e => {
+      e.stopPropagation();
+      if (this.panel.hidden) this._open(); else this._close();
+    });
+    if (this.search) {
+      this.search.addEventListener("input", () => this._applyFilter(this.search.value));
+      this.search.addEventListener("click", e => e.stopPropagation());
+      this.search.addEventListener("keydown", e => {
+        if (e.key === "Escape") this._close();
+        if (e.key === "Enter") { e.preventDefault(); const f = this._itemEls.find(el => el.style.display !== "none" && el.dataset.norm === this._filter); if (f) f.click(); }
+      });
+    }
+    this.list.addEventListener("scroll", () => {});
+  }
+}
+document.addEventListener("click", () => {
+  document.querySelectorAll(".cdd.open").forEach(el => { el.classList.remove("open"); const p = el.querySelector(".cdd-panel"); if (p) p.hidden = true; });
+});
+
+const letterDropdown = new CustomDropdown(document.getElementById("letterFilter"), "Alle letters",
+  Object.keys(dutchNames).map(letter => ({
+    label: letter + " (" + dutchNames[letter].length + ")",
+    items: ["✕ Wis keuze"].concat(dutchNames[letter])
+  })), { onChange: null });
+const popularDropdown = new CustomDropdown(document.getElementById("popularFilter"), "Populaire namen (top 500)",
+  [{ label: "", items: popularNames }], { onChange: null });
+
+// Color dropdown items for names already searched or uitgenodigd.
+// Guarded: may be called from saveCurrentGallery() during init, before the menus exist.
+function markMenuOptions() {
+  try { letterDropdown.refresh(); } catch (e) {}
+  try { popularDropdown.refresh(); } catch (e) {}
 }
 function updateLookupBar() {
   const bar = document.getElementById("lookupBar");
@@ -390,7 +493,7 @@ function updateStats() {
 }
 
 function getFilterLetter() {
-  const val = letterFilter.value;
+  const val = letterDropdown.value;
   // If dropdown has a full name (from optgroup), extract first letter
   if (val && val.length > 1) {
     return val.charAt(0).toUpperCase();
@@ -477,8 +580,8 @@ function generateVariations(name) {
 
 searchBtn.addEventListener("click", async () => {
   const namesInput = document.getElementById("names").value.trim();
-  const selectedName = letterFilter.value;
-  const selectedPopular = popularFilter.value;
+  const selectedName = letterDropdown.value;
+  const selectedPopular = popularDropdown.value;
   let list;
   if (selectedPopular && popularNames.includes(selectedPopular)) {
     list = generateVariations(selectedPopular);
@@ -529,7 +632,7 @@ searchBtn.addEventListener("click", async () => {
   }
 });
 
-letterFilter.addEventListener("change", renderGallery);
+letterDropdown.root.addEventListener("change", renderGallery);
 
 document.getElementById("clearBtn").addEventListener("click", () => {
   if (confirm("Wis alle galerij geschiedenis?")) {
