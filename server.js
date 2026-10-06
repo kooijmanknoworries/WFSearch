@@ -45,6 +45,9 @@ const HTML = `<!DOCTYPE html>
   .card .info{padding:1rem}
   .card .name{font-size:1.1rem;font-weight:700;margin-bottom:.25rem}
   .card .name.searched{color:#e74c3c}
+  option.searched{color:#e74c3c;font-weight:600}
+  .lookup-bar{margin-top:.5rem;padding:.4rem .7rem;border-radius:6px;font-size:.85rem;display:flex;align-items:center;gap:.4rem;background:#eef;color:#335}
+  .lookup-bar .mark{font-size:1rem}
   .card .id{color:#888;font-size:.8rem}
   .card .age{color:#4a4;font-size:.85rem;margin-top:.35rem;font-weight:600}
   .card .date{color:#999;font-size:.75rem;margin-top:.25rem}
@@ -83,6 +86,7 @@ const HTML = `<!DOCTYPE html>
       <select id="letterFilter"><option value="">Alle letters</option></select>
       <select id="popularFilter"><option value="">Populaire namen (top 500)</option></select>
     </div>
+    <div class="lookup-bar" id="lookupBar" style="display:none"></div>
     <div class="btn-row">
       <button id="searchBtn">Zoek Alle</button>
       <button id="clearBtn">Wis Geschiedenis</button>
@@ -126,12 +130,39 @@ function saveCurrentGallery() {
   galleries[currentGalleryKey].count = history.length;
   galleries[currentGalleryKey].updated = Date.now();
   saveGalleriesMeta();
+  rebuildInvitedNames();
+  markMenuOptions();
 }
 // Invited tracking (global across all galleries)
 let invitedSet = new Set(JSON.parse(localStorage.getItem("wf_invited") || "[]"));
 let searchedSet = new Set(JSON.parse(localStorage.getItem("wf_searched") || "[]"));
 function saveSearched() { localStorage.setItem("wf_searched", JSON.stringify(Array.from(searchedSet))); }
-function saveInvited() { localStorage.setItem("wf_invited", JSON.stringify([...invitedSet])); }
+function normName(s) { return (s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+// Usernames of gallery entries marked "uitgenodigd" (invitedSet stores user IDs).
+// Rebuilt whenever history or invite state changes so menus/cards can mark them red.
+let invitedNames = new Set();
+function rebuildInvitedNames() {
+  const s = new Set();
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.indexOf("wf_") === 0 && k !== "wf_invited" && k !== "wf_searched" && k !== "wf_galleries" && k !== "wf_current_gallery") {
+      let arr;
+      try { arr = JSON.parse(localStorage.getItem(k) || "[]"); } catch (e) { continue; }
+      for (const u of arr) if (u && invitedSet.has(u.id)) s.add(normName(u.username));
+    }
+  }
+  invitedNames = s;
+}
+function isMarked(name) {
+  const n = normName(name);
+  if (!n) return false;
+  return searchedSet.has(n) || invitedNames.has(n);
+}
+function saveInvited() {
+  localStorage.setItem("wf_invited", JSON.stringify([...invitedSet]));
+  rebuildInvitedNames();
+  markMenuOptions();
+}
 function loadCurrentGallery() { history = JSON.parse(localStorage.getItem("wf_" + currentGalleryKey) || "[]"); }
 function setCurrentGallery(key) {
   saveCurrentGallery();
@@ -160,6 +191,8 @@ function renderGalleryList() {
         currentGalleryKey = "__current__";
         localStorage.setItem("wf_current_gallery", "__current__");
         history = [];
+        rebuildInvitedNames();
+        markMenuOptions();
         renderGallery();
         renderGalleryList();
         showToast("Galerij verwijderd");
@@ -203,6 +236,7 @@ Object.keys(dutchNames).forEach(letter => {
     const opt = document.createElement("option");
     opt.value = name;
     opt.textContent = name;
+    opt.dataset.norm = normName(name);
     group.appendChild(opt);
   });
   letterFilter.appendChild(group);
@@ -216,8 +250,50 @@ popularNames.forEach(name => {
   const opt = document.createElement("option");
   opt.value = name;
   opt.textContent = name;
+  opt.dataset.norm = normName(name);
   popularFilter.appendChild(opt);
 });
+
+// Mark dropdown options for names already searched or uitgenodigd.
+// Uses both a CSS class and a visible red-dot prefix (option color CSS is unreliable in
+// select elements across browsers). The option value is left untouched so search keeps working.
+function markMenuOptions() {
+  for (const opt of letterFilter.querySelectorAll("option")) {
+    const marked = isMarked(opt.value);
+    opt.classList.toggle("searched", marked);
+    const label = (marked ? "🔴 " : "") + opt.value;
+    if (opt.textContent !== label) opt.textContent = label;
+  }
+  for (const opt of popularFilter.querySelectorAll("option")) {
+    const marked = isMarked(opt.value);
+    opt.classList.toggle("searched", marked);
+    const label = (marked ? "🔴 " : "") + opt.value;
+    if (opt.textContent !== label) opt.textContent = label;
+  }
+}
+// Precomputed set of every name that appears in either dropdown (normalized)
+const menuNames = new Set([
+  ...letterFilter.querySelectorAll("option"),
+  ...popularFilter.querySelectorAll("option")
+].map(o => o.dataset.norm).filter(Boolean));
+function inMenu(name) {
+  return menuNames.has(normName(name));
+}
+function updateLookupBar() {
+  const bar = document.getElementById("lookupBar");
+  const val = document.getElementById("names").value.trim();
+  if (!val) { bar.style.display = "none"; return; }
+  const lines = val.split("\\n").map(s => s.trim()).filter(Boolean);
+  const unique = Array.from(new Set(lines.map(normName)));
+  bar.style.display = "flex";
+  bar.innerHTML = unique.map(n => {
+    const found = isMarked(n);
+    const inM = inMenu(n);
+    const mark = found ? "🔴" : (inM ? "🔵" : "⚪");
+    const cls = found ? "color:#c62828;font-weight:700" : "color:#445";
+    return '<span style="' + cls + '">' + mark + ' ' + n + '</span>';
+  }).join(" ");
+}
 
 function showToast(msg) {
   toast.textContent = msg;
@@ -260,7 +336,7 @@ function renderCard(user) {
   card.innerHTML =
     '<img src="/avatar/' + user.id + '" alt="' + user.username + '" />' +
     '<div class="info">' +
-    '<div class="name' + (searchedSet.has(user.username) ? ' searched' : '') + '">' + user.username + '</div>' +
+    '<div class="name' + (isMarked(user.username) ? ' searched' : '') + '">' + user.username + '</div>' +
     '<div class="id">ID: ' + user.id + '</div>' +
     '<div class="age">' + formatAge(user.created) + '</div>' +
     '<div class="date">Sinds ' + formatDate(user.created) + '</div>' +
@@ -362,8 +438,9 @@ async function searchUser(username) {
           history.push(u);
           saveCurrentGallery();
         }
-        searchedSet.add(u.username);
+        searchedSet.add(normName(u.username));
         saveSearched();
+        markMenuOptions();
         return 1;
       }
       return -1;
@@ -413,6 +490,12 @@ searchBtn.addEventListener("click", async () => {
     showToast("Selecteer een naam of plak namen hierboven");
     return;
   }
+  // Remember the base name(s) you asked to search for, so they show red in the menus
+  const baseNames = (selectedPopular || selectedName) ? [selectedPopular || selectedName] : list;
+  for (const n of baseNames) searchedSet.add(normName(n));
+  saveSearched();
+  markMenuOptions();
+  updateLookupBar();
   searchBtn.disabled = true;
   searchBtn.textContent = "Zoek " + list.length + " namen…";
   lastApiError = null;
@@ -421,7 +504,7 @@ searchBtn.addEventListener("click", async () => {
   let found = 0, tooOld = 0, notFound = 0, apiErrors = 0;
   for (const name of list) {
     const result = await searchUser(name);
-    if (result === 1) found++;
+    if (result === 1) { found++; renderGallery(); }
     else if (result === -1) tooOld++;
     else if (result === -2) apiErrors++;
     else notFound++;
@@ -479,11 +562,13 @@ document.getElementById("newGalleryBtn").addEventListener("click", () => {
   showToast("Nieuwe galerij gestart");
 });
 
+// Live lookup: as you type/select a name, show whether it's already searched or uitgenodigd
+document.getElementById("names").addEventListener("input", updateLookupBar);
+
+rebuildInvitedNames();
+markMenuOptions();
 renderGallery();
 renderGalleryList();
-;
-
-renderGallery();
 </script>
 </body>
 </html>`;
