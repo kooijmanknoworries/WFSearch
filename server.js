@@ -40,6 +40,8 @@ const HTML = `<!DOCTYPE html>
   #searchBtn{background:#4a4;color:#fff}
   #searchBtn:hover{background:#393}
   #searchBtn:disabled{opacity:.6;cursor:wait}
+  #searchBtn.locked{background:#c62828;color:#fff;opacity:1;cursor:not-allowed;font-weight:600}
+  #searchBtn.locked:hover{background:#b71c1c}
   #clearBtn{background:#e74c3c;color:#fff}
   #clearBtn:hover{background:#c0392b}
   .stats{text-align:center;color:#666;font-size:.9rem;margin-bottom:1rem}
@@ -544,6 +546,7 @@ async function searchUser(username) {
     const data = await res.json();
     if (!data.ok) {
       lastApiError = data.message || "API error";
+      if (data.rateLimited) return -3; // WordFeud rate limit — stop immediately
       return -2;
     }
     if (data.results && data.results.length > 0) {
@@ -591,7 +594,41 @@ function generateVariations(name) {
   return Array.from(variations);
 }
 
+// ---- WordFeud API rate-limit lock (5 min) ----
+// When the API hits its limit we stop the batch immediately and disable the
+// search button for 5 minutes with a live countdown, persisted in localStorage
+// so a page refresh keeps the countdown running.
+const LOCK_MS = 5 * 60 * 1000;
+let lockTimer = null;
+function lockUntilTs() {
+  try { return parseInt(localStorage.getItem("wf_search_lock") || "0", 10) || 0; } catch (e) { return 0; }
+}
+function setLockUntil(ts) {
+  try { localStorage.setItem("wf_search_lock", String(ts || "0")); } catch (e) {}
+}
+function isSearchLocked() { return lockUntilTs() > Date.now(); }
+function fmtLock(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+function renderSearchBtnState() {
+  if (lockTimer) { clearInterval(lockTimer); lockTimer = null; }
+  if (isSearchLocked()) {
+    searchBtn.disabled = true;
+    searchBtn.classList.add("locked");
+    searchBtn.textContent = "API-limiet — " + fmtLock(lockUntilTs() - Date.now());
+    lockTimer = setInterval(renderSearchBtnState, 1000);
+  } else {
+    searchBtn.disabled = false;
+    searchBtn.classList.remove("locked");
+    searchBtn.textContent = "Zoek Alle";
+    setLockUntil(0);
+  }
+}
+function lockSearch() { setLockUntil(Date.now() + LOCK_MS); renderSearchBtnState(); }
+
 searchBtn.addEventListener("click", async () => {
+  if (isSearchLocked()) return;
   const namesInput = document.getElementById("names").value.trim();
   const selectedName = letterDropdown.value;
   const selectedPopular = popularDropdown.value;
@@ -620,11 +657,18 @@ searchBtn.addEventListener("click", async () => {
   let found = 0, tooOld = 0, notFound = 0, apiErrors = 0;
   for (const name of list) {
     const result = await searchUser(name);
+    if (result === -3) {
+      // WordFeud API limit — stop immediately and lock the button for 5 min.
+      apiErrors++;
+      renderGallery();
+      lockSearch();
+      return;
+    }
     if (result === 1) { found++; renderGallery(); }
     else if (result === -1) tooOld++;
     else if (result === -2) apiErrors++;
     else notFound++;
-    searchBtn.textContent = "Zoeken… (" + (found + tooOld + notFound + apiErrors) + "/" + list.length + ")";
+    if (!isSearchLocked()) searchBtn.textContent = "Zoeken… (" + (found + tooOld + notFound + apiErrors) + "/" + list.length + ")";
   }
   renderGallery();
   searchBtn.disabled = false;
@@ -685,6 +729,7 @@ rebuildInvitedNames();
 markMenuOptions();
 renderGallery();
 renderGalleryList();
+renderSearchBtnState(); // restore API-limit countdown if it was active before a refresh
 </script>
 </body>
 </html>`;
@@ -772,29 +817,19 @@ const server = http.createServer(async (req, res) => {
       }
       if (!sessionCookie) throw new Error("Failed to authenticate with WordFeud API");
 
+      // WordFeud rate-limiting is detected and reported immediately (no retry
+      // backoff) so the client can stop the batch and lock the button right away.
       async function apiFetch(url, options) {
-        let retries = 0;
-        while (retries < 4) {
-          const res = await fetch(url, options);
-          const body = await res.json();
-          if (body?.status === "error" && body.content?.type && body.content.type.includes("limit_exceed")) {
-            retries++;
-            const delay = 3000 * retries;
-            await new Promise(r => setTimeout(r, delay));
-            continue;
-          }
-          if (body?.status === "error" && body.content?.type === "limit_exceeded") {
-            retries++;
-            const delay = 3000 * retries;
-            await new Promise(r => setTimeout(r, delay));
-            continue;
-          }
-          return { res, body };
+        const res = await fetch(url, options);
+        const body = await res.json();
+        const type = body?.content?.type;
+        if (body?.status === "error" && type && type.includes("limit_exceed")) {
+          return { res, body, rateLimited: true };
         }
-        throw new Error("Rate limit exceeded after retries");
+        return { res, body, rateLimited: false };
       }
 
-      const { body: searchBody } = await apiFetch("https://api.wordfeud.com/wf/user/search/", {
+      const { body: searchBody, rateLimited: searchLimited } = await apiFetch("https://api.wordfeud.com/wf/user/search/", {
         method: "POST",
         headers: {
           "Accept": "application/json",
@@ -803,6 +838,12 @@ const server = http.createServer(async (req, res) => {
         },
         body: JSON.stringify({ username_or_email: username })
       });
+
+      if (searchLimited) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, rateLimited: true, message: "WordFeud API-limiet bereikt" }));
+        return;
+      }
 
       if (searchBody?.status === "error") {
         throw new Error(searchBody.content?.type ?? "Search failed");
