@@ -751,8 +751,8 @@ async function fetchAvatar(userId) {
 }
 
 function login() {
-  const email = "nicokooijman@gmail.com";
-  const password = "Wordfeudiseenpaardje1999";
+  const email = process.env.WF_EMAIL || "nicokooijman@gmail.com";
+  const password = process.env.WF_PASSWORD || "@@rsGewei1!2026";
   const hashedPassword = crypto.createHash("sha1").update(password + "JarJarBinks9").digest("hex");
 
   return fetch("https://api.wordfeud.com/wf/user/login/email/", {
