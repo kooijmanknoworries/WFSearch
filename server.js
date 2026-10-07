@@ -732,10 +732,6 @@ renderSearchBtnState(); // restore API-limit countdown if it was active before a
 </body>
 </html>`;
 
-// Pre-login once at startup
-let sessionCookie = null;
-let loginPromise = null;
-
 // Fetch avatar from S3 (avoids browser CORS issues)
 async function fetchAvatar(userId) {
   try {
@@ -748,26 +744,40 @@ async function fetchAvatar(userId) {
   }
 }
 
-function login() {
-  const email = process.env.WF_EMAIL || "nicokooijman@gmail.com";
-  const password = process.env.WF_PASSWORD || "@@rsGewei1!2026";
-  const hashedPassword = crypto.createHash("sha1").update(password + "JarJarBinks9").digest("hex");
+// Pool of WordFeud accounts. Each account has its own rate-limit window, so
+// when one hits the limit we automatically switch to the next one. The
+// frontend only locks (5 min) when every account in the pool is exhausted.
+const ACCOUNTS = [
+  { label: "Nico",   email: process.env.WF_EMAIL    || "nicokooijman@gmail.com",  password: process.env.WF_PASSWORD || "@@rsGewei1!2026" },
+  { label: "woord81", email: "gooischemeren@gmail.com",  password: "@@rsGewei1!2026" },
+  { label: "winte",   email: "wintelligency@gmail.com",  password: "@@rsGewei1!2026" },
+].map(a => ({ ...a, cookie: null }));
 
-  return fetch("https://api.wordfeud.com/wf/user/login/email/", {
+async function loginAccount(acc) {
+  const hashedPassword = crypto.createHash("sha1").update(acc.password + "JarJarBinks9").digest("hex");
+  const res = await fetch("https://api.wordfeud.com/wf/user/login/email/", {
     method: "POST",
     headers: { "Accept": "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password: hashedPassword })
-  }).then(async (res) => {
-    const body = await res.json();
-    const cookie = res.headers.get("set-cookie") ?? "";
-    const match = cookie.match(/sessionid=([^;]+)/);
-    if (!match) throw new Error("No session cookie received");
-    if (body?.status === "error") throw new Error("Login failed: " + (body.content?.type ?? "unknown"));
-    return match[1];
+    body: JSON.stringify({ email: acc.email, password: hashedPassword })
   });
+  const body = await res.json();
+  const match = (res.headers.get("set-cookie") ?? "").match(/sessionid=([^;]+)/);
+  if (!match) throw new Error("No session cookie received");
+  if (body?.status === "error") throw new Error("Login failed: " + (body.content?.type ?? "unknown"));
+  acc.cookie = match[1];
 }
 
-loginPromise = login().catch(() => null);
+async function getAvailableAccount() {
+  for (let i = 0; i < ACCOUNTS.length; i++) {
+    const acc = ACCOUNTS[i];
+    if (acc.cookie) return acc;
+    try { await loginAccount(acc); return acc; } catch {}
+  }
+  return null;
+}
+
+// Login all accounts in the background at startup so switching is instant.
+Promise.allSettled(ACCOUNTS.map(loginAccount));
 
 
 
@@ -809,64 +819,66 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      // Ensure we have a session cookie
-      if (!sessionCookie) {
-        sessionCookie = await loginPromise;
-      }
-      if (!sessionCookie) throw new Error("Failed to authenticate with WordFeud API");
-
-      // WordFeud rate-limiting is detected and reported immediately (no retry
-      // backoff) so the client can stop the batch and lock the button right away.
-      async function apiFetch(url, options) {
-        const res = await fetch(url, options);
-        const body = await res.json();
-        const type = body?.content?.type;
-        if (body?.status === "error" && type && type.includes("limit_exceed")) {
-          return { res, body, rateLimited: true };
-        }
-        return { res, body, rateLimited: false };
-      }
-
-      const { body: searchBody, rateLimited: searchLimited } = await apiFetch("https://api.wordfeud.com/wf/user/search/", {
-        method: "POST",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json",
-          "Cookie": "sessionid=" + sessionCookie
-        },
-        body: JSON.stringify({ username_or_email: username })
+      // Run the search against the account pool. Each account has its own
+      // rate-limit window: when one hits the limit we immediately switch to the
+      // next account (no retry backoff). Only when EVERY account is exhausted do
+      // we report rateLimited to the client, which then locks the button 5 min.
+      const apiFetch = (acc, url, options) => fetch(url, {
+        ...options,
+        headers: { ...options.headers, "Cookie": "sessionid=" + acc.cookie }
+      }).then(async (res) => {
+        const b = await res.json();
+        const limited = b?.status === "error" && typeof b.content?.type === "string" && b.content.type.includes("limit_exceed");
+        return { body: b, rateLimited: limited };
       });
 
-      if (searchLimited) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: false, rateLimited: true, message: "WordFeud API-limiet bereikt" }));
-        return;
-      }
-
-      if (searchBody?.status === "error") {
-        throw new Error(searchBody.content?.type ?? "Search failed");
-      }
-
-      const results = (searchBody?.content?.result ?? []).map(u => ({
-        id: u.user_id ?? u.id,
-        username: u.username
-      }));
-
-      if (results.length > 0) {
-        const userId = results[0].id;
-        try {
-          const { body: profileBody } = await apiFetch("https://api.wordfeud.com/wf/user/" + userId + "/profile/", {
-            headers: {
-              "Accept": "application/json",
-              "Cookie": "sessionid=" + sessionCookie
-            }
-          });
-          if (profileBody?.content?.created) {
-            results[0].created = profileBody.content.created;
-          }
-        } catch {
-          // profile fetch failed, continue without account age
+      let results = null, lastError = null, switched = 0;
+      for (let i = 0; i < ACCOUNTS.length && results === null; i++) {
+        const acc = ACCOUNTS[i];
+        if (!acc.cookie) {
+          try { await loginAccount(acc); } catch (e) { lastError = e.message; continue; }
         }
+        const { body: searchBody, rateLimited: searchLimited } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/search/", {
+          method: "POST",
+          headers: { "Accept": "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ username_or_email: username })
+        });
+        if (searchLimited) {
+          acc.cookie = null; // this account is done, try the next one
+          switched++;
+          continue;
+        }
+        if (searchBody?.status === "error") {
+          lastError = new Error(searchBody.content?.type ?? "Search failed");
+          acc.cookie = null; // bad session, try the next account
+          continue;
+        }
+        // success (or "not found" — a valid, non-limited response)
+        results = (searchBody?.content?.result ?? []).map(u => ({
+          id: u.user_id ?? u.id,
+          username: u.username
+        }));
+        if (results.length > 0) {
+          const userId = results[0].id;
+          try {
+            const { body: profileBody } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/" + userId + "/profile/", {
+              headers: { "Accept": "application/json" }
+            });
+            if (profileBody?.content?.created) results[0].created = profileBody.content.created;
+          } catch {
+            // profile fetch failed, continue without account age
+          }
+        }
+      }
+
+      if (results === null) {
+        // every account in the pool is rate-limited (or failed)
+        const msg = switched >= ACCOUNTS.length
+          ? "WordFeud API-limiet bereikt (alle accounts)"
+          : "WordFeud API error: " + (lastError?.message ?? "no available account");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, rateLimited: switched > 0, message: msg }));
+        return;
       }
 
       res.writeHead(200, { "Content-Type": "application/json" });
