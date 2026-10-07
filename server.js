@@ -48,11 +48,9 @@ const HTML = `<!DOCTYPE html>
   .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1.5rem}
   .card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.06);overflow:hidden;text-align:center;transition:transform .2s;position:relative}
   .card:hover{transform:translateY(-2px)}
-  .card .remove-btn{position:absolute;top:8px;right:8px;z-index:3;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;border:none;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s,background .2s}
-  .card:hover .remove-btn{opacity:1}
+  .card .remove-btn{position:absolute;top:8px;right:8px;z-index:3;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;border:none;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;transition:background .2s}
   .card .remove-btn:hover{background:rgba(231,76,60,.9)}
-  .card .invite-btn{position:absolute;top:8px;left:8px;z-index:3;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);color:#555;border:1px solid #ddd;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:4px;opacity:0;transition:opacity .2s,background .2s,color .2s}
-  .card:hover .invite-btn{opacity:1}
+  .card .invite-btn{position:absolute;top:8px;left:8px;z-index:3;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.92);color:#555;border:1px solid #ddd;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:4px;transition:background .2s,color .2s}
   .card .invite-btn:hover{background:rgba(76,175,80,.12)}
   .card .invite-btn.invited{background:rgba(76,175,80,.15);color:#2e7d32;border-color:#4caf50;opacity:1}
   .card.invited{border:2px solid #4caf50}
