@@ -176,6 +176,7 @@ function rebuildInvitedNames() {
     if (k && k.indexOf("wf_") === 0 && k !== "wf_invited" && k !== "wf_searched" && k !== "wf_galleries" && k !== "wf_current_gallery") {
       let arr;
       try { arr = JSON.parse(localStorage.getItem(k) || "[]"); } catch (e) { continue; }
+      if (!Array.isArray(arr)) continue; // skip non-gallery keys (e.g. wf_search_lock holds a number)
       for (const u of arr) if (u && u.username) {
         const b = baseNameOf(u.username);
         if (b) s.add(b);
