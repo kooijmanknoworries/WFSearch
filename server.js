@@ -117,6 +117,11 @@ const HTML = `<!DOCTYPE html>
   .account-msg{margin-top:.5rem;font-size:.8rem;min-height:1rem}
   .account-msg.err{color:#c62828}
   .account-msg.ok{color:#2e7d32}
+  .rate-badge{font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap}
+  .rate-badge.ok{color:#2e7d32;background:#e8f5e9;border:1px solid #a5d6a7}
+  .rate-badge.limited{color:#b71c1c;background:#ffebee;border:1px solid #ef9a9a}
+  .rate-badge.unknown{color:#888;background:#f2f2f2;border:1px solid #ddd}
+  .rate-badge .rl-timer{font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -785,7 +790,47 @@ function accountMsg(text, cls) {
   accountMsgEl.textContent = text || "";
   accountMsgEl.className = "account-msg" + (cls ? " " + cls : "");
 }
+// --- Per-account rate-limit badges ---
+// The server tells us each account's rateLimitedUntil (epoch ms, 0 = free).
+// We render a small badge next to every account and tick the countdown once a
+// second. We also use it to unlock the search button as soon as the *active*
+// (preferred) account is no longer limited.
+let rateBadgeEls = {}; // label -> badge <span>
+function fmtCountdown(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+function renderRateBadges() {
+  const now = Date.now();
+  for (const a of d_accounts) {
+    const el = rateBadgeEls[a.label];
+    if (!el) continue;
+    const until = a.rateLimitedUntil || 0;
+    if (until > now) {
+      el.className = "rate-badge limited";
+      el.innerHTML = "⏳ gelimiteerd <span class='rl-timer'>" + fmtCountdown(until - now) + "</span>";
+      el.title = "API-limiet actief — nog " + fmtCountdown(until - now) + " minuten";
+    } else {
+      el.className = "rate-badge ok";
+      el.textContent = "✓ beschikbaar";
+      el.title = "API-limiet niet actief";
+    }
+  }
+}
+// Unlock the search button when the account we're currently searching with is
+// free. Only ever unlocks (never re-locks) — the 5-min countdown from an
+// exhausted search still owns the button until then.
+function maybeUnlockSearch() {
+  if (!isSearchLocked()) return;
+  const now = Date.now();
+  const pref = d_accounts.find(a => a.preferred);
+  if (pref && !(pref.rateLimitedUntil && pref.rateLimitedUntil > now)) {
+    setLockUntil(0);
+    renderSearchBtnState();
+  }
+}
 function renderAccounts(accounts) {
+  rateBadgeEls = {};
   accountListEl.innerHTML = "";
   for (const a of accounts) {
     const row = document.createElement("div");
@@ -803,6 +848,11 @@ function renderAccounts(accounts) {
       tag.textContent = "actief";
       lbl.appendChild(tag);
     }
+    const badge = document.createElement("span");
+    badge.className = "rate-badge unknown";
+    badge.textContent = "…";
+    lbl.appendChild(badge);
+    rateBadgeEls[a.label] = badge;
     const mail = document.createElement("div");
     mail.className = "mail";
     mail.textContent = a.email + (a.loggedIn ? " · ingelogd" : " · niet ingelogd");
@@ -825,8 +875,19 @@ function renderAccounts(accounts) {
         });
         const d = await r.json();
         if (!d.ok) throw new Error(d.error || "switch failed");
+        d_accounts = d.accounts;
         renderAccounts(d.accounts);
-        accountMsg("Zoek nu met " + a.label, "ok");
+        renderRateBadges();
+        const target = d.accounts.find(x => x.label === a.label);
+        const isLimited = target && target.rateLimitedUntil && target.rateLimitedUntil > Date.now();
+        if (isLimited) {
+          accountMsg(a.label + " is nog gelimiteerd — zoek pas als de limiet is verlopen", "err");
+        } else {
+          // Switching to an unlimited account: unlock the search button now.
+          setLockUntil(0);
+          renderSearchBtnState();
+          accountMsg("Zoek nu met " + a.label, "ok");
+        }
       } catch (e) {
         accountMsg("Fout: " + e.message, "err");
         renderAccounts(d_accounts);
@@ -867,7 +928,12 @@ async function refreshAccounts() {
   try {
     const r = await fetch("/api/accounts");
     const d = await r.json();
-    if (d.ok) { d_accounts = d.accounts; renderAccounts(d.accounts); }
+    if (d.ok) {
+      d_accounts = d.accounts;
+      renderAccounts(d.accounts);
+      renderRateBadges();
+      maybeUnlockSearch();
+    }
   } catch {}
 }
 document.getElementById("accAddBtn").addEventListener("click", async () => {
@@ -896,6 +962,12 @@ document.getElementById("accAddBtn").addEventListener("click", async () => {
   btn.textContent = "➕ Toevoegen"; btn.disabled = false;
 });
 refreshAccounts();
+// Poll the server for fresh per-account rate-limit state every 30s (the server
+// itself only probes WordFeud every 2 min, so this just picks up new state).
+setInterval(refreshAccounts, 30000);
+// Tick the badge countdowns once a second so the mm:ss counts down live without
+// re-fetching, and re-check the unlock condition as limits expire.
+setInterval(() => { renderRateBadges(); maybeUnlockSearch(); }, 1000);
 </script>
 </body>
 </html>`;
@@ -948,6 +1020,59 @@ function persistAccounts() {
 }
 if (!ACCOUNTS.some(a => a.preferred)) { ACCOUNTS[0].preferred = true; }
 
+// ---- Per-account rate-limit tracking ----
+// WordFeud enforces a rolling limit per account. When we (or the probe below)
+// see a limit_exceed response we record `rateLimitedUntil` so the frontend can
+// show which accounts are limited and for how long, and so we stop hammering a
+// limited account. The limit window is ~5 minutes on WordFeud's side.
+const RATE_LIMIT_MS = 5 * 60 * 1000;   // how long we treat an account as limited
+const PROBE_INTERVAL_MS = 2 * 60 * 1000; // background poll cadence (every 2 min)
+
+function markRateLimited(acc, ms) {
+  acc.rateLimitedUntil = Date.now() + (ms || RATE_LIMIT_MS);
+  acc.cookie = null; // drop the session; we re-login once the window clears
+}
+function isRateLimited(acc) {
+  return !!(acc.rateLimitedUntil && acc.rateLimitedUntil > Date.now());
+}
+
+// Check one account's live limit state with a cheap search probe.
+// Returns: "ok" (usable now), "limited" (hit the limit), or "unknown"
+// (login failed / transient network error — keep whatever we last knew).
+async function probeAccount(acc) {
+  if (!acc.cookie) {
+    try { await loginAccount(acc); } catch { return "unknown"; }
+  }
+  let res;
+  try {
+    res = await fetch("https://api.wordfeud.com/wf/user/search/", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json", "Content-Type": "application/json",
+        "Cookie": "sessionid=" + acc.cookie
+      },
+      body: JSON.stringify({ username_or_email: "___wfsearch_probe___" })
+    });
+  } catch { return "unknown"; }
+  let b; try { b = await res.json(); } catch { b = null; }
+  if (!b || typeof b !== "object") return "unknown"; // WAF block page / bad JSON
+  const limited = b.status === "error" && typeof b.content?.type === "string" && b.content.type.includes("limit_exceed");
+  if (limited) { markRateLimited(acc); return "limited"; }
+  // Any other valid response (even "not found") means the account is usable.
+  acc.rateLimitedUntil = 0;
+  return "ok";
+}
+
+// Periodic sweep: refresh the limit state for every account that is NOT
+// already known to be limited. Accounts inside their limit window are left
+// alone so we don't spend API quota poking them.
+async function probeAllAccounts() {
+  for (const acc of ACCOUNTS) {
+    if (isRateLimited(acc)) continue;
+    await probeAccount(acc);
+  }
+}
+
 async function loginAccount(acc) {
   const hashedPassword = crypto.createHash("sha1").update(acc.password + "JarJarBinks9").digest("hex");
   const res = await fetch("https://api.wordfeud.com/wf/user/login/email/", {
@@ -992,6 +1117,7 @@ function accountSummary() {
     email: a.email,
     preferred: !!a.preferred,
     loggedIn: !!a.cookie,
+    rateLimitedUntil: a.rateLimitedUntil || 0, // 0 = not limited, else epoch ms
   }));
 }
 
@@ -1059,6 +1185,26 @@ async function handleAccounts(req, res, url, jsonBody) {
 // Login all accounts in the background at startup so switching is instant.
 Promise.allSettled(orderedAccounts().map(loginAccount));
 
+// Background poller: refresh each account's rate-limit state every 2 minutes so
+// the frontend can show which accounts are limited even before a search is run.
+// `inFlight` prevents overlapping sweeps if a slow probe takes longer than the
+// interval. The first sweep starts a few seconds after boot, once logins settle.
+let probeInFlight = false;
+async function runProbeSweep() {
+  if (probeInFlight) return;
+  probeInFlight = true;
+  try {
+    await probeAllAccounts();
+    console.log("[probe] rate-limit sweep:",
+      ACCOUNTS.map(a => a.label + (a.rateLimitedUntil && a.rateLimitedUntil > Date.now() ? " LIMITED" : " ok")).join(", "));
+  } catch (e) {
+    console.error("[probe] sweep failed:", e.message);
+  } finally {
+    probeInFlight = false;
+  }
+}
+setTimeout(runProbeSweep, 8000);
+setInterval(runProbeSweep, PROBE_INTERVAL_MS);
 
 
 const server = http.createServer(async (req, res) => {
@@ -1124,7 +1270,14 @@ const server = http.createServer(async (req, res) => {
       });
 
       let results = null, lastError = null, switched = 0;
-      const pool = orderedAccounts(); // preferred account first
+      // Preferred account first; skip any account we already know is inside its
+      // limit window (avoids a guaranteed-failing API call). If the preferred
+      // account itself is limited but others are free, we fall straight to them.
+      const ordered = orderedAccounts();
+      const pool = ordered.filter(a => !isRateLimited(a) || a.preferred);
+      // Count already-limited accounts toward `switched` so the "all accounts
+      // exhausted" message is accurate even when we skipped them.
+      switched = ordered.length - pool.length;
       for (let i = 0; i < pool.length && results === null; i++) {
         const acc = pool[i];
         if (!acc.cookie) {
@@ -1136,7 +1289,7 @@ const server = http.createServer(async (req, res) => {
           body: JSON.stringify({ username_or_email: username })
         });
         if (searchLimited) {
-          acc.cookie = null; // this account is done, try the next one
+          markRateLimited(acc); // record the window so the UI can show it
           switched++;
           continue;
         }
@@ -1145,7 +1298,9 @@ const server = http.createServer(async (req, res) => {
           acc.cookie = null; // bad session, try the next account
           continue;
         }
-        // success (or "not found" — a valid, non-limited response)
+        // success (or "not found" — a valid, non-limited response): the account
+        // clearly works, so clear any stale limit flag on it.
+        acc.rateLimitedUntil = 0;
         results = (searchBody?.content?.result ?? []).map(u => ({
           id: u.user_id ?? u.id,
           username: u.username
