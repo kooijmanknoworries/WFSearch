@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
 
 const PORT = 8011;
 
@@ -85,6 +87,36 @@ const HTML = `<!DOCTYPE html>
   .age-filter input{width:60px;padding:.3rem .4rem;border:1px solid #ddd;border-radius:4px;font-size:.8rem;text-align:center}
   .age-filter input:focus{outline:none;border-color:#4a4}
   .age-filter .toggle{font-size:.75rem;color:#888;margin-left:.5rem}
+  .account-panel{margin-top:1rem;padding:.85rem 1rem;background:#eef4ff;border:1px solid #cfe0ff;border-radius:10px}
+  .account-panel h3{margin:0 0 .6rem;font-size:.95rem;color:#1a237e;display:flex;align-items:center;gap:.4rem}
+  .account-panel h3 .hint{font-weight:400;font-size:.72rem;color:#668}
+  .account-list{display:flex;flex-direction:column;gap:.4rem}
+  .account-row{display:flex;align-items:center;gap:.5rem;padding:.45rem .6rem;background:#fff;border:1px solid #dde4f5;border-radius:8px;flex-wrap:wrap}
+  .account-row.active{border-color:#4a4;background:#f1fff1;box-shadow:0 0 0 1px #4a4 inset}
+  .account-dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
+  .account-dot.on{background:#43a047}
+  .account-dot.off{background:#e57373}
+  .account-info{flex:1;min-width:140px}
+  .account-info .lbl{font-weight:700;font-size:.9rem;display:flex;align-items:center;gap:.35rem}
+  .account-info .mail{font-size:.74rem;color:#778}
+  .account-info .tag{font-size:.68rem;font-weight:700;color:#2e7d32;background:#e8f5e9;border-radius:4px;padding:1px 5px}
+  .account-btns{display:flex;gap:.35rem;align-items:center}
+  .account-btns button{font-size:.78rem;padding:.32rem .55rem;border-radius:6px;border:1px solid #c9d4ee;background:#f7f9ff;color:#335;cursor:pointer}
+  .account-btns button:hover{background:#eef3ff}
+  .account-btns button.go{background:#2e7d32;border-color:#2e7d32;color:#fff}
+  .account-btns button.go:hover{background:#256428}
+  .account-btns button.del{color:#c62828;border-color:#f2b8b8;background:#fff}
+  .account-btns button.del:hover{background:#ffecec}
+  .account-btns .busy{font-size:.72rem;color:#e67e22;animation:spin 1s linear infinite;display:inline-block}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .account-add{display:flex;gap:.4rem;margin-top:.6rem;flex-wrap:wrap}
+  .account-add input{flex:1;min-width:120px;padding:.42rem .5rem;border:1px solid #c9d4ee;border-radius:6px;font-size:.82rem}
+  .account-add input:focus{outline:none;border-color:#4a4}
+  .account-add button{padding:.42rem .8rem;border-radius:6px;border:none;background:#1565C0;color:#fff;font-size:.82rem;cursor:pointer}
+  .account-add button:hover{background:#0d47a1}
+  .account-msg{margin-top:.5rem;font-size:.8rem;min-height:1rem}
+  .account-msg.err{color:#c62828}
+  .account-msg.ok{color:#2e7d32}
 </style>
 </head>
 <body>
@@ -121,6 +153,17 @@ const HTML = `<!DOCTYPE html>
       <input id="maxYears" type="number" min="0" max="50" value="2" /> <label>jaar</label>
       <input id="maxDays" type="number" min="0" max="3650" value="0" /> <label>dagen</label>
       <span class="toggle">(leeg = geen limiet)</span>
+    </div>
+    <div class="account-panel">
+      <h3>👤 WordFeud-accounts <span class="hint">— klik “Gebruik” om op een ander account te zoeken</span></h3>
+      <div class="account-list" id="accountList"></div>
+      <div class="account-add">
+        <input id="accLabel" placeholder="Naam (bijv. account4)" />
+        <input id="accEmail" placeholder="e-mailadres" />
+        <input id="accPassword" type="password" placeholder="wachtwoord" />
+        <button id="accAddBtn">➕ Toevoegen</button>
+      </div>
+      <div class="account-msg" id="accountMsg"></div>
     </div>
   </div>
   <div class="search-banner" id="searchBanner" style="display:none"></div>
@@ -733,6 +776,126 @@ markMenuOptions();
 renderGallery();
 renderGalleryList();
 renderSearchBtnState(); // restore API-limit countdown if it was active before a refresh
+
+// --- WordFeud account selector ---
+const accountListEl = document.getElementById("accountList");
+const accountMsgEl = document.getElementById("accountMsg");
+let d_accounts = []; // last known account list, for re-rendering after an error
+function accountMsg(text, cls) {
+  accountMsgEl.textContent = text || "";
+  accountMsgEl.className = "account-msg" + (cls ? " " + cls : "");
+}
+function renderAccounts(accounts) {
+  accountListEl.innerHTML = "";
+  for (const a of accounts) {
+    const row = document.createElement("div");
+    row.className = "account-row" + (a.preferred ? " active" : "");
+    const dot = document.createElement("span");
+    dot.className = "account-dot " + (a.loggedIn ? "on" : "off");
+    const info = document.createElement("div");
+    info.className = "account-info";
+    const lbl = document.createElement("div");
+    lbl.className = "lbl";
+    lbl.textContent = a.label;
+    if (a.preferred) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "actief";
+      lbl.appendChild(tag);
+    }
+    const mail = document.createElement("div");
+    mail.className = "mail";
+    mail.textContent = a.email + (a.loggedIn ? " · ingelogd" : " · niet ingelogd");
+    info.appendChild(lbl);
+    info.appendChild(mail);
+    const btns = document.createElement("div");
+    btns.className = "account-btns";
+    const go = document.createElement("button");
+    go.className = "go";
+    go.textContent = a.preferred ? "✓ actief" : "Gebruik";
+    go.disabled = a.preferred;
+    go.onclick = async () => {
+      go.textContent = "…";
+      go.disabled = true;
+      accountMsg("");
+      try {
+        const r = await fetch("/api/accounts/switch", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: a.label })
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || "switch failed");
+        renderAccounts(d.accounts);
+        accountMsg("Zoek nu met " + a.label, "ok");
+      } catch (e) {
+        accountMsg("Fout: " + e.message, "err");
+        renderAccounts(d_accounts);
+      }
+    };
+    btns.appendChild(go);
+    if (accounts.length > 1) {
+      const del = document.createElement("button");
+      del.className = "del";
+      del.textContent = "✕";
+      del.title = "Account verwijderen";
+      del.onclick = async () => {
+        if (!confirm("Account “" + a.label + "” verwijderen?")) return;
+        del.disabled = true;
+        try {
+          const r = await fetch("/api/accounts/delete", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ label: a.label })
+          });
+          const d = await r.json();
+          if (!d.ok) throw new Error(d.error || "delete failed");
+          renderAccounts(d.accounts);
+          accountMsg("Account " + a.label + " verwijderd", "ok");
+        } catch (e) {
+          accountMsg("Fout: " + e.message, "err");
+          del.disabled = false;
+        }
+      };
+      btns.appendChild(del);
+    }
+    row.appendChild(dot);
+    row.appendChild(info);
+    row.appendChild(btns);
+    accountListEl.appendChild(row);
+  }
+}
+async function refreshAccounts() {
+  try {
+    const r = await fetch("/api/accounts");
+    const d = await r.json();
+    if (d.ok) { d_accounts = d.accounts; renderAccounts(d.accounts); }
+  } catch {}
+}
+document.getElementById("accAddBtn").addEventListener("click", async () => {
+  const label = document.getElementById("accLabel").value.trim();
+  const email = document.getElementById("accEmail").value.trim();
+  const password = document.getElementById("accPassword").value;
+  if (!email || !password) { accountMsg("Vul e-mailadres en wachtwoord in", "err"); return; }
+  const btn = document.getElementById("accAddBtn");
+  btn.textContent = "Toevoegen…"; btn.disabled = true;
+  accountMsg("Login aan het proberen met " + (email || "…") + "…");
+  try {
+    const r = await fetch("/api/accounts/add", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, email, password })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "add failed");
+    document.getElementById("accLabel").value = "";
+    document.getElementById("accEmail").value = "";
+    document.getElementById("accPassword").value = "";
+    refreshAccounts();
+    accountMsg("Account " + (label || email) + " toegevoegd en ingelogd", "ok");
+  } catch (e) {
+    accountMsg("Fout: " + e.message, "err");
+  }
+  btn.textContent = "➕ Toevoegen"; btn.disabled = false;
+});
+refreshAccounts();
 </script>
 </body>
 </html>`;
@@ -752,11 +915,38 @@ async function fetchAvatar(userId) {
 // Pool of WordFeud accounts. Each account has its own rate-limit window, so
 // when one hits the limit we automatically switch to the next one. The
 // frontend only locks (5 min) when every account in the pool is exhausted.
-const ACCOUNTS = [
-  { label: "Nico",   email: process.env.WF_EMAIL    || "nicokooijman@gmail.com",  password: process.env.WF_PASSWORD || "@@rsGewei1!2026" },
-  { label: "woord81", email: "gooischemeren@gmail.com",  password: "@@rsGewei1!2026" },
-  { label: "winte",   email: "wintelligency@gmail.com",  password: "@@rsGewei1!2026" },
-].map(a => ({ ...a, cookie: null }));
+//
+// The pool is stored on disk (DATA_DIR/accounts.json) so extra accounts you
+// add from the UI survive container rebuilds. `preferred` is the account to
+// try first; when it is rate-limited the server cycles through the rest.
+const DATA_DIR = process.env.DATA_DIR || "/data";
+const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
+const DEFAULT_PASSWORD = "@@rsGewei1!2026";
+const SEED_ACCOUNTS = [
+  { label: "Nico",    email: process.env.WF_EMAIL || "nicokooijman@gmail.com", password: process.env.WF_PASSWORD || DEFAULT_PASSWORD },
+  { label: "woord81", email: "gooischemeren@gmail.com",  password: DEFAULT_PASSWORD },
+  { label: "winte",   email: "wintelligency@gmail.com",  password: DEFAULT_PASSWORD },
+];
+
+function loadAccountsFromDisk() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, "utf8"));
+    if (Array.isArray(raw) && raw.length) return raw;
+  } catch {}
+  return null;
+}
+let ACCOUNTS = (loadAccountsFromDisk() || SEED_ACCOUNTS).map(a => ({ ...a, cookie: null }));
+function persistAccounts() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const slim = ACCOUNTS.map(({ label, email, password, preferred }) =>
+      ({ label, email, password, preferred: !!preferred }));
+    fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(slim, null, 2));
+  } catch (e) {
+    console.error("persistAccounts failed:", e.message);
+  }
+}
+if (!ACCOUNTS.some(a => a.preferred)) { ACCOUNTS[0].preferred = true; }
 
 async function loginAccount(acc) {
   const hashedPassword = crypto.createHash("sha1").update(acc.password + "JarJarBinks9").digest("hex");
@@ -772,17 +962,88 @@ async function loginAccount(acc) {
   acc.cookie = match[1];
 }
 
+function orderedAccounts() {
+  // Preferred account first (if it exists), then the rest in stored order.
+  const pref = ACCOUNTS.find(a => a.preferred);
+  const rest = ACCOUNTS.filter(a => a !== pref);
+  return pref ? [pref, ...rest] : [...ACCOUNTS];
+}
+
 async function getAvailableAccount() {
-  for (let i = 0; i < ACCOUNTS.length; i++) {
-    const acc = ACCOUNTS[i];
+  const list = orderedAccounts();
+  for (let i = 0; i < list.length; i++) {
+    const acc = list[i];
     if (acc.cookie) return acc;
     try { await loginAccount(acc); return acc; } catch {}
   }
   return null;
 }
 
+function accountSummary() {
+  return ACCOUNTS.map(a => ({
+    label: a.label,
+    email: a.email,
+    preferred: !!a.preferred,
+    loggedIn: !!a.cookie,
+  }));
+}
+
+async function handleAccounts(req, res, url, jsonBody) {
+  if (url.pathname === "/api/accounts" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+  }
+  if (url.pathname === "/api/accounts/switch" && req.method === "POST") {
+    const { label } = jsonBody || {};
+    const acc = ACCOUNTS.find(a => a.label === label);
+    if (!acc) { res.writeHead(404, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ ok: false, error: "Account not found" })); }
+    try {
+      await loginAccount(acc); // force a fresh session so we start below any limit
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: false, error: "Login failed: " + e.message }));
+    }
+    ACCOUNTS.forEach(a => { a.preferred = a === acc; });
+    persistAccounts();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+  }
+  if (url.pathname === "/api/accounts/add" && req.method === "POST") {
+    const { label, email, password } = jsonBody || {};
+    if (!email || !password) { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ ok: false, error: "email en password verplicht" })); }
+    if (ACCOUNTS.some(a => a.email.toLowerCase() === email.toLowerCase())) {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: false, error: "Account met dit e-mailadres bestaat al" }));
+    }
+    const acc = { label: (label || email).trim(), email: email.trim(), password: String(password), preferred: false, cookie: null };
+    try {
+      await loginAccount(acc);
+    } catch (e) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok: false, error: "Login mislukt: " + e.message }));
+    }
+    ACCOUNTS.push(acc);
+    persistAccounts();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+  }
+  if (url.pathname === "/api/accounts/delete" && req.method === "POST") {
+    const { label } = jsonBody || {};
+    const idx = ACCOUNTS.findIndex(a => a.label === label);
+    if (idx === -1) { res.writeHead(404, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ ok: false, error: "Account not found" })); }
+    if (ACCOUNTS.length <= 1) { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ ok: false, error: "Kan het laatste account niet verwijderen" })); }
+    const removed = ACCOUNTS[idx];
+    ACCOUNTS.splice(idx, 1);
+    if (removed.preferred && !ACCOUNTS.some(a => a.preferred)) ACCOUNTS[0].preferred = true;
+    persistAccounts();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+  }
+  return false; // not an account route
+}
+
 // Login all accounts in the background at startup so switching is instant.
-Promise.allSettled(ACCOUNTS.map(loginAccount));
+Promise.allSettled(orderedAccounts().map(loginAccount));
 
 
 
@@ -809,6 +1070,17 @@ const server = http.createServer(async (req, res) => {
       res.end("Avatar not found");
     }
     return;
+  }
+
+  // Account management: GET /api/accounts, POST /api/accounts/{switch,add,delete}
+  if (req.url.startsWith("/api/accounts")) {
+    let body = "";
+    if (req.method === "POST") for await (const chunk of req) body += chunk;
+    let jsonBody = {};
+    try { jsonBody = body ? JSON.parse(body) : {}; } catch { jsonBody = {}; }
+    const url = new URL(req.url, "http://localhost");
+    const handled = await handleAccounts(req, res, url, jsonBody);
+    if (handled) return;
   }
 
   if (req.method === "POST" && req.url === "/search") {
@@ -838,8 +1110,9 @@ const server = http.createServer(async (req, res) => {
       });
 
       let results = null, lastError = null, switched = 0;
-      for (let i = 0; i < ACCOUNTS.length && results === null; i++) {
-        const acc = ACCOUNTS[i];
+      const pool = orderedAccounts(); // preferred account first
+      for (let i = 0; i < pool.length && results === null; i++) {
+        const acc = pool[i];
         if (!acc.cookie) {
           try { await loginAccount(acc); } catch (e) { lastError = e.message; continue; }
         }

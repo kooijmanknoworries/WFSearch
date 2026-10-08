@@ -8,6 +8,10 @@ services:
       - "0.0.0.0:43895:8011"
       # Loopback so the host Caddy route can reach it.
       - "127.0.0.1:8011:8011"
+    volumes:
+      - ./data:/data
+    environment:
+      - NODE_ENV=production
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8011/"]
       interval: 30s
