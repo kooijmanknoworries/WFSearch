@@ -488,9 +488,13 @@ function toggleInvite(userId, card, btn) {
 
 function removeUser(userId, card) {
   history = history.filter(u => u.id !== userId);
-  saveCurrentGallery();
-  card.remove();
+  card.remove();        // remove from the UI first, so the ✕ always responds
   updateStats();
+  try {
+    saveCurrentGallery();
+  } catch (e) {
+    showToast("Fout bij verwijderen: " + e.message);
+  }
 }
 
 function updateStats() {
