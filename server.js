@@ -955,10 +955,17 @@ async function loginAccount(acc) {
     headers: { "Accept": "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ email: acc.email, password: hashedPassword })
   });
-  const body = await res.json();
+  const raw = await res.text();
   const match = (res.headers.get("set-cookie") ?? "").match(/sessionid=([^;]+)/);
-  if (!match) throw new Error("No session cookie received");
-  if (body?.status === "error") throw new Error("Login failed: " + (body.content?.type ?? "unknown"));
+  // WordFeud's WAF sometimes answers with an HTML block page instead of JSON
+  // when it sees too many requests. Handle that instead of crashing on parse.
+  let body = null;
+  try { body = JSON.parse(raw); } catch { body = null; }
+  if (!body || typeof body !== "object") {
+    throw new Error("WordFeud blokkeert de inlogpoging (te veel pogingen). Probeer het over een paar minuten opnieuw.");
+  }
+  if (body.status === "error") throw new Error("Login mislukt: " + (body.content?.type ?? "unknown"));
+  if (!match) throw new Error("Geen sessie-cookie ontvangen");
   acc.cookie = match[1];
 }
 
@@ -997,11 +1004,18 @@ async function handleAccounts(req, res, url, jsonBody) {
     const { label } = jsonBody || {};
     const acc = ACCOUNTS.find(a => a.label === label);
     if (!acc) { res.writeHead(404, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ ok: false, error: "Account not found" })); }
-    try {
-      await loginAccount(acc); // force a fresh session so we start below any limit
-    } catch (e) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ ok: false, error: "Login failed: " + e.message }));
+    // Only log in if this account has no session yet. Reusing an existing
+    // session avoids extra login requests that can trip WordFeud's WAF, and
+    // note a re-login does NOT reset an account's rate limit (that is
+    // per-account, not per-session) — the server will fall through to the
+    // next account automatically when the limit is hit.
+    if (!acc.cookie) {
+      try {
+        await loginAccount(acc);
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
     }
     ACCOUNTS.forEach(a => { a.preferred = a === acc; });
     persistAccounts();
