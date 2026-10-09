@@ -645,41 +645,42 @@ function generateVariations(name) {
   return Array.from(variations);
 }
 
-// ---- WordFeud API rate-limit lock (5 min) ----
-// When the API hits its limit we stop the batch immediately and disable the
-// search button for 5 minutes with a live countdown, persisted in localStorage
-// so a page refresh keeps the countdown running.
-const LOCK_MS = 5 * 60 * 1000;
-let lockTimer = null;
-function lockUntilTs() {
-  try { return parseInt(localStorage.getItem("wf_search_lock") || "0", 10) || 0; } catch (e) { return 0; }
-}
-function setLockUntil(ts) {
-  try { localStorage.setItem("wf_search_lock", String(ts || "0")); } catch (e) {}
-}
-function isSearchLocked() { return lockUntilTs() > Date.now(); }
-function fmtLock(ms) {
-  const s = Math.max(0, Math.ceil(ms / 1000));
-  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
-}
+// ---- Search button availability (shared IP limit, live) ----
+// WordFeud limits per IP address and every account goes out from this server,
+// so they all share ONE limit window — switching accounts can't bypass it.
+// The button is disabled exactly while the server reports the IP as limited,
+// with a live countdown; it re-enables automatically as soon as the server's
+// background re-check clears the limit.
+let searching = false;       // true while a search batch is running
+let d_ipLimitedUntil = 0;    // shared IP limit (epoch ms, 0 = free)
+let accountPollTimer = null; // extra-fast poll while the button is blocked
+function ipLimited() { return d_ipLimitedUntil > Date.now(); }
 function renderSearchBtnState() {
-  if (lockTimer) { clearInterval(lockTimer); lockTimer = null; }
-  if (isSearchLocked()) {
+  if (searching) return; // don't touch the button while a batch is running
+  if (ipLimited()) {
     searchBtn.disabled = true;
     searchBtn.classList.add("locked");
-    searchBtn.textContent = "API-limiet — " + fmtLock(lockUntilTs() - Date.now());
-    lockTimer = setInterval(renderSearchBtnState, 1000);
+    const s = Math.max(0, Math.ceil((d_ipLimitedUntil - Date.now()) / 1000));
+    searchBtn.textContent = "API-limiet (IP) — " +
+      Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") +
+      " · geldt voor alle accounts";
   } else {
     searchBtn.disabled = false;
     searchBtn.classList.remove("locked");
     searchBtn.textContent = "Zoek Alle";
-    setLockUntil(0);
+  }
+  // Poll more often while blocked so we notice the limit clearing promptly;
+  // go back to the normal 30s cadence once the button is available.
+  if (ipLimited() && !accountPollTimer) {
+    accountPollTimer = setInterval(refreshAccounts, 10000);
+  } else if (!ipLimited() && accountPollTimer) {
+    clearInterval(accountPollTimer);
+    accountPollTimer = null;
   }
 }
-function lockSearch() { setLockUntil(Date.now() + LOCK_MS); renderSearchBtnState(); }
 
 searchBtn.addEventListener("click", async () => {
-  if (isSearchLocked()) return;
+  if (searching || ipLimited()) return;
   const namesInput = document.getElementById("names").value.trim();
   const selectedName = letterDropdown.value;
   const selectedPopular = popularDropdown.value;
@@ -700,6 +701,7 @@ searchBtn.addEventListener("click", async () => {
   saveSearched();
   markMenuOptions();
   updateLookupBar();
+  searching = true;
   searchBtn.disabled = true;
   searchBtn.textContent = "Zoek " + list.length + " namen…";
   lastApiError = null;
@@ -709,21 +711,30 @@ searchBtn.addEventListener("click", async () => {
   for (const name of list) {
     const result = await searchUser(name);
     if (result === -3) {
-      // WordFeud API limit — stop immediately and lock the button for 5 min.
+      // The shared IP is rate-limited — stop the batch immediately, refresh the
+      // limit data, and block the button with a live countdown.
       apiErrors++;
       renderGallery();
-      lockSearch();
+      searching = false;
+      await refreshAccounts(); // pick up the fresh IP-limit data
+      renderSearchBtnState();
+      banner.style.display = "flex";
+      banner.className = "search-banner err";
+      banner.innerHTML = '<span class="stat">' + found + ' gevonden</span>' +
+        (notFound ? '<span class="stat">' + notFound + ' niet gevonden</span>' : '') +
+        '<span class="stat" style="color:#b71c1c">⚠ ' + (lastApiError || "WordFeud API-limiet bereikt") +
+        ' — geldt voor alle accounts</span>';
       return;
     }
     if (result === 1) { found++; renderGallery(); }
     else if (result === -1) tooOld++;
     else if (result === -2) apiErrors++;
     else notFound++;
-    if (!isSearchLocked()) searchBtn.textContent = "Zoeken… (" + (found + tooOld + notFound + apiErrors) + "/" + list.length + ")";
+    searchBtn.textContent = "Zoeken… (" + (found + tooOld + notFound + apiErrors) + "/" + list.length + ")";
   }
   renderGallery();
-  searchBtn.disabled = false;
-  searchBtn.textContent = "Zoek Alle";
+  searching = false;
+  renderSearchBtnState(); // re-enable (or keep blocked) based on the active account
   // Show persistent banner — stays until next search
   banner.style.display = "flex";
   if (apiErrors > 0) {
@@ -780,7 +791,6 @@ rebuildInvitedNames();
 markMenuOptions();
 renderGallery();
 renderGalleryList();
-renderSearchBtnState(); // restore API-limit countdown if it was active before a refresh
 
 // --- WordFeud account selector ---
 const accountListEl = document.getElementById("accountList");
@@ -815,18 +825,6 @@ function renderRateBadges() {
       el.textContent = "✓ beschikbaar";
       el.title = "API-limiet niet actief";
     }
-  }
-}
-// Unlock the search button when the account we're currently searching with is
-// free. Only ever unlocks (never re-locks) — the 5-min countdown from an
-// exhausted search still owns the button until then.
-function maybeUnlockSearch() {
-  if (!isSearchLocked()) return;
-  const now = Date.now();
-  const pref = d_accounts.find(a => a.preferred);
-  if (pref && !(pref.rateLimitedUntil && pref.rateLimitedUntil > now)) {
-    setLockUntil(0);
-    renderSearchBtnState();
   }
 }
 function renderAccounts(accounts) {
@@ -876,16 +874,13 @@ function renderAccounts(accounts) {
         const d = await r.json();
         if (!d.ok) throw new Error(d.error || "switch failed");
         d_accounts = d.accounts;
+        d_ipLimitedUntil = d.ipLimitedUntil || 0;
         renderAccounts(d.accounts);
         renderRateBadges();
-        const target = d.accounts.find(x => x.label === a.label);
-        const isLimited = target && target.rateLimitedUntil && target.rateLimitedUntil > Date.now();
-        if (isLimited) {
-          accountMsg(a.label + " is nog gelimiteerd — zoek pas als de limiet is verlopen", "err");
+        renderSearchBtnState(); // button reflects the shared IP limit
+        if (d_ipLimitedUntil > Date.now()) {
+          accountMsg("API-limiet (IP) geldt voor alle accounts — wacht tot de limiet verlopen is", "err");
         } else {
-          // Switching to an unlimited account: unlock the search button now.
-          setLockUntil(0);
-          renderSearchBtnState();
           accountMsg("Zoek nu met " + a.label, "ok");
         }
       } catch (e) {
@@ -930,9 +925,10 @@ async function refreshAccounts() {
     const d = await r.json();
     if (d.ok) {
       d_accounts = d.accounts;
+      d_ipLimitedUntil = d.ipLimitedUntil || 0;
       renderAccounts(d.accounts);
       renderRateBadges();
-      maybeUnlockSearch();
+      renderSearchBtnState(); // keep the button in sync with the fresh account data
     }
   } catch {}
 }
@@ -965,9 +961,10 @@ refreshAccounts();
 // Poll the server for fresh per-account rate-limit state every 30s (the server
 // itself only probes WordFeud every 2 min, so this just picks up new state).
 setInterval(refreshAccounts, 30000);
-// Tick the badge countdowns once a second so the mm:ss counts down live without
-// re-fetching, and re-check the unlock condition as limits expire.
-setInterval(() => { renderRateBadges(); maybeUnlockSearch(); }, 1000);
+// Tick the badge countdowns and the search-button countdown once a second so
+// the mm:ss values move live without re-fetching; the button re-enables itself
+// as soon as the active account's limit has passed.
+setInterval(() => { renderRateBadges(); renderSearchBtnState(); }, 1000);
 </script>
 </body>
 </html>`;
@@ -984,13 +981,14 @@ async function fetchAvatar(userId) {
   }
 }
 
-// Pool of WordFeud accounts. Each account has its own rate-limit window, so
-// when one hits the limit we automatically switch to the next one. The
-// frontend only locks (5 min) when every account in the pool is exhausted.
+// Pool of WordFeud accounts. WordFeud rate-limits per IP, so all accounts
+// share ONE limit window — the server searches with the `preferred` account
+// and the frontend disables the search button (with a countdown) while the
+// shared IP limit is active.
 //
 // The pool is stored on disk (DATA_DIR/accounts.json) so extra accounts you
-// add from the UI survive container rebuilds. `preferred` is the account to
-// try first; when it is rate-limited the server cycles through the rest.
+// add from the UI survive container rebuilds. `preferred` is the account
+// used for searches.
 const DATA_DIR = process.env.DATA_DIR || "/data";
 const ACCOUNTS_FILE = path.join(DATA_DIR, "accounts.json");
 const DEFAULT_PASSWORD = "@@rsGewei1!2026";
@@ -1020,57 +1018,57 @@ function persistAccounts() {
 }
 if (!ACCOUNTS.some(a => a.preferred)) { ACCOUNTS[0].preferred = true; }
 
-// ---- Per-account rate-limit tracking ----
-// WordFeud enforces a rolling limit per account. When we (or the probe below)
-// see a limit_exceed response we record `rateLimitedUntil` so the frontend can
-// show which accounts are limited and for how long, and so we stop hammering a
-// limited account. The limit window is ~5 minutes on WordFeud's side.
-const RATE_LIMIT_MS = 5 * 60 * 1000;   // how long we treat an account as limited
-const PROBE_INTERVAL_MS = 2 * 60 * 1000; // background poll cadence (every 2 min)
+// ---- Rate-limit tracking (shared IP) ----
+// WordFeud enforces a rolling limit per IP address (~5 min), and every
+// account in the pool goes out from this server — so all of them share ONE
+// limit window. When we see a limit_exceed response we record it once
+// (ipLimitedUntil) and mirror it onto every account so the per-account badges
+// in the UI stay consistent. While limited we re-check with a single probe
+// (one probe tells us the state of all accounts) instead of guessing.
+const RATE_LIMIT_MS = 5 * 60 * 1000;   // how long we treat the IP as limited
+const PROBE_INTERVAL_MS = 30 * 1000;   // re-check cadence WHILE limited
+let ipLimitedUntil = 0;
 
+function isIpLimited() { return ipLimitedUntil > Date.now(); }
 function markRateLimited(acc, ms) {
-  acc.rateLimitedUntil = Date.now() + (ms || RATE_LIMIT_MS);
+  ipLimitedUntil = Date.now() + (ms || RATE_LIMIT_MS);
+  for (const a of ACCOUNTS) a.rateLimitedUntil = ipLimitedUntil;
   acc.cookie = null; // drop the session; we re-login once the window clears
+}
+function clearRateLimits() {
+  ipLimitedUntil = 0;
+  for (const a of ACCOUNTS) a.rateLimitedUntil = 0;
 }
 function isRateLimited(acc) {
   return !!(acc.rateLimitedUntil && acc.rateLimitedUntil > Date.now());
 }
 
-// Check one account's live limit state with a cheap search probe.
-// Returns: "ok" (usable now), "limited" (hit the limit), or "unknown"
-// (login failed / transient network error — keep whatever we last knew).
-async function probeAccount(acc) {
-  if (!acc.cookie) {
-    try { await loginAccount(acc); } catch { return "unknown"; }
-  }
-  let res;
-  try {
-    res = await fetch("https://api.wordfeud.com/wf/user/search/", {
-      method: "POST",
-      headers: {
-        "Accept": "application/json", "Content-Type": "application/json",
-        "Cookie": "sessionid=" + acc.cookie
-      },
-      body: JSON.stringify({ username_or_email: "___wfsearch_probe___" })
-    });
-  } catch { return "unknown"; }
-  let b; try { b = await res.json(); } catch { b = null; }
-  if (!b || typeof b !== "object") return "unknown"; // WAF block page / bad JSON
-  const limited = b.status === "error" && typeof b.content?.type === "string" && b.content.type.includes("limit_exceed");
-  if (limited) { markRateLimited(acc); return "limited"; }
-  // Any other valid response (even "not found") means the account is usable.
-  acc.rateLimitedUntil = 0;
-  return "ok";
-}
-
-// Periodic sweep: refresh the limit state for every account that is NOT
-// already known to be limited. Accounts inside their limit window are left
-// alone so we don't spend API quota poking them.
-async function probeAllAccounts() {
+// One cheap search probe determines the state of the whole IP.
+// Returns "ok", "limited", or "unknown" (login/network failure — keep state).
+async function probeIpLimit() {
   for (const acc of ACCOUNTS) {
-    if (isRateLimited(acc)) continue;
-    await probeAccount(acc);
+    if (!acc.cookie) { try { await loginAccount(acc); } catch { continue; } }
+    if (!acc.cookie) continue;
+    let res;
+    try {
+      res = await fetch("https://api.wordfeud.com/wf/user/search/", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json", "Content-Type": "application/json",
+          "Cookie": "sessionid=" + acc.cookie
+        },
+        body: JSON.stringify({ username_or_email: "___wfsearch_probe___" })
+      });
+    } catch { continue; }
+    let b; try { b = await res.json(); } catch { b = null; }
+    if (!b || typeof b !== "object") continue; // WAF block page / bad JSON
+    const limited = b.status === "error" && typeof b.content?.type === "string" && b.content.type.includes("limit_exceed");
+    if (limited) { markRateLimited(acc); return "limited"; }
+    // Any other valid response (even "not found") means the IP is usable.
+    clearRateLimits();
+    return "ok";
   }
+  return "unknown";
 }
 
 async function loginAccount(acc) {
@@ -1112,19 +1110,22 @@ async function getAvailableAccount() {
 }
 
 function accountSummary() {
-  return ACCOUNTS.map(a => ({
-    label: a.label,
-    email: a.email,
-    preferred: !!a.preferred,
-    loggedIn: !!a.cookie,
-    rateLimitedUntil: a.rateLimitedUntil || 0, // 0 = not limited, else epoch ms
-  }));
+  return {
+    accounts: ACCOUNTS.map(a => ({
+      label: a.label,
+      email: a.email,
+      preferred: !!a.preferred,
+      loggedIn: !!a.cookie,
+      rateLimitedUntil: a.rateLimitedUntil || 0, // 0 = not limited, else epoch ms
+    })),
+    ipLimitedUntil: ipLimitedUntil || 0, // shared IP limit (0 = free)
+  };
 }
 
 async function handleAccounts(req, res, url, jsonBody) {
   if (url.pathname === "/api/accounts" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+    return res.end(JSON.stringify({ ok: true, ...accountSummary() }));
   }
   if (url.pathname === "/api/accounts/switch" && req.method === "POST") {
     const { label } = jsonBody || {};
@@ -1146,7 +1147,7 @@ async function handleAccounts(req, res, url, jsonBody) {
     ACCOUNTS.forEach(a => { a.preferred = a === acc; });
     persistAccounts();
     res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+    return res.end(JSON.stringify({ ok: true, ...accountSummary() }));
   }
   if (url.pathname === "/api/accounts/add" && req.method === "POST") {
     const { label, email, password } = jsonBody || {};
@@ -1165,7 +1166,7 @@ async function handleAccounts(req, res, url, jsonBody) {
     ACCOUNTS.push(acc);
     persistAccounts();
     res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+    return res.end(JSON.stringify({ ok: true, ...accountSummary() }));
   }
   if (url.pathname === "/api/accounts/delete" && req.method === "POST") {
     const { label } = jsonBody || {};
@@ -1177,7 +1178,7 @@ async function handleAccounts(req, res, url, jsonBody) {
     if (removed.preferred && !ACCOUNTS.some(a => a.preferred)) ACCOUNTS[0].preferred = true;
     persistAccounts();
     res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ ok: true, accounts: accountSummary() }));
+    return res.end(JSON.stringify({ ok: true, ...accountSummary() }));
   }
   return false; // not an account route
 }
@@ -1185,26 +1186,25 @@ async function handleAccounts(req, res, url, jsonBody) {
 // Login all accounts in the background at startup so switching is instant.
 Promise.allSettled(orderedAccounts().map(loginAccount));
 
-// Background poller: refresh each account's rate-limit state every 2 minutes so
-// the frontend can show which accounts are limited even before a search is run.
-// `inFlight` prevents overlapping sweeps if a slow probe takes longer than the
-// interval. The first sweep starts a few seconds after boot, once logins settle.
+// Background re-check: while the shared IP is rate-limited, probe once every
+// 30s until it clears (one probe tells us the state of all accounts). When the
+// IP is free we don't probe at all, so the poller costs zero API quota in
+// steady state. `probeInFlight` prevents overlapping probes.
 let probeInFlight = false;
-async function runProbeSweep() {
+async function runProbeCheck() {
   if (probeInFlight) return;
+  if (!isIpLimited()) return; // free — nothing to re-check
   probeInFlight = true;
   try {
-    await probeAllAccounts();
-    console.log("[probe] rate-limit sweep:",
-      ACCOUNTS.map(a => a.label + (a.rateLimitedUntil && a.rateLimitedUntil > Date.now() ? " LIMITED" : " ok")).join(", "));
+    const state = await probeIpLimit();
+    console.log("[probe] IP limit re-check:", state);
   } catch (e) {
-    console.error("[probe] sweep failed:", e.message);
+    console.error("[probe] re-check failed:", e.message);
   } finally {
     probeInFlight = false;
   }
 }
-setTimeout(runProbeSweep, 8000);
-setInterval(runProbeSweep, PROBE_INTERVAL_MS);
+setInterval(runProbeCheck, PROBE_INTERVAL_MS);
 
 
 const server = http.createServer(async (req, res) => {
@@ -1256,10 +1256,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      // Run the search against the account pool. Each account has its own
-      // rate-limit window: when one hits the limit we immediately switch to the
-      // next account (no retry backoff). Only when EVERY account is exhausted do
-      // we report rateLimited to the client, which then locks the button 5 min.
+      // All accounts share the server's IP, so they share ONE rate-limit
+      // window. If we already know the IP is limited, answer immediately with
+      // no API call (the background probe re-checks until it clears).
+      if (isIpLimited()) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({
+          ok: false, rateLimited: true,
+          message: "WordFeud API-limiet actief (IP) — probeer het over " +
+            Math.ceil((ipLimitedUntil - Date.now()) / 60000) + " min"
+        }));
+      }
+
       const apiFetch = (acc, url, options) => fetch(url, {
         ...options,
         headers: { ...options.headers, "Cookie": "sessionid=" + acc.cookie }
@@ -1269,63 +1277,47 @@ const server = http.createServer(async (req, res) => {
         return { body: b, rateLimited: limited };
       });
 
-      let results = null, lastError = null, switched = 0;
-      // Preferred account first; skip any account we already know is inside its
-      // limit window (avoids a guaranteed-failing API call). If the preferred
-      // account itself is limited but others are free, we fall straight to them.
-      const ordered = orderedAccounts();
-      const pool = ordered.filter(a => !isRateLimited(a) || a.preferred);
-      // Count already-limited accounts toward `switched` so the "all accounts
-      // exhausted" message is accurate even when we skipped them.
-      switched = ordered.length - pool.length;
-      for (let i = 0; i < pool.length && results === null; i++) {
-        const acc = pool[i];
-        if (!acc.cookie) {
-          try { await loginAccount(acc); } catch (e) { lastError = e.message; continue; }
-        }
-        const { body: searchBody, rateLimited: searchLimited } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/search/", {
-          method: "POST",
-          headers: { "Accept": "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ username_or_email: username })
-        });
-        if (searchLimited) {
-          markRateLimited(acc); // record the window so the UI can show it
-          switched++;
-          continue;
-        }
-        if (searchBody?.status === "error") {
-          lastError = new Error(searchBody.content?.type ?? "Search failed");
-          acc.cookie = null; // bad session, try the next account
-          continue;
-        }
-        // success (or "not found" — a valid, non-limited response): the account
-        // clearly works, so clear any stale limit flag on it.
-        acc.rateLimitedUntil = 0;
-        results = (searchBody?.content?.result ?? []).map(u => ({
-          id: u.user_id ?? u.id,
-          username: u.username
-        }));
-        if (results.length > 0) {
-          const userId = results[0].id;
-          try {
-            const { body: profileBody } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/" + userId + "/profile/", {
-              headers: { "Accept": "application/json" }
-            });
-            if (profileBody?.content?.created) results[0].created = profileBody.content.created;
-          } catch {
-            // profile fetch failed, continue without account age
-          }
+      // Search with the preferred account; if it hits the shared limit, record
+      // it and report back (switching accounts would hit the same IP limit).
+      const acc = orderedAccounts()[0];
+      if (!acc.cookie) {
+        try { await loginAccount(acc); } catch (e) {
+          res.writeHead(502, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ ok: false, message: "WordFeud API error: " + e.message }));
         }
       }
-
-      if (results === null) {
-        // every account in the pool is rate-limited (or failed)
-        const msg = switched >= ACCOUNTS.length
-          ? "WordFeud API-limiet bereikt (alle accounts)"
-          : "WordFeud API error: " + (lastError?.message ?? "no available account");
+      const { body: searchBody, rateLimited: searchLimited } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/search/", {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ username_or_email: username })
+      });
+      if (searchLimited) {
+        markRateLimited(acc); // record the shared window so the UI can show it
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: false, rateLimited: switched > 0, message: msg }));
-        return;
+        return res.end(JSON.stringify({ ok: false, rateLimited: true, message: "WordFeud API-limiet bereikt" }));
+      }
+      if (searchBody?.status === "error") {
+        acc.cookie = null; // bad session; will re-login on the next search
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ ok: false, message: "WordFeud API error: " + (searchBody.content?.type ?? "search failed") }));
+      }
+      // success (or "not found" — a valid, non-limited response): the IP is
+      // clearly usable, so clear any stale limit flag.
+      clearRateLimits();
+      const results = (searchBody?.content?.result ?? []).map(u => ({
+        id: u.user_id ?? u.id,
+        username: u.username
+      }));
+      if (results.length > 0) {
+        const userId = results[0].id;
+        try {
+          const { body: profileBody } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/" + userId + "/profile/", {
+            headers: { "Accept": "application/json" }
+          });
+          if (profileBody?.content?.created) results[0].created = profileBody.content.created;
+        } catch {
+          // profile fetch failed, continue without account age
+        }
       }
 
       res.writeHead(200, { "Content-Type": "application/json" });
