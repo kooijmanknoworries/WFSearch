@@ -1299,6 +1299,7 @@ const server = http.createServer(async (req, res) => {
 
       let results = null;
       let viaTor = false;
+      let torAcc = null; // the account that got through via Tor (for the profile fetch)
 
       // Fast path: direct search while the IP is not known to be limited.
       if (!isIpLimited()) {
@@ -1324,11 +1325,17 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      // Slow path: the shared IP is limited — route through a fresh Tor
-      // circuit so the request leaves from a different IP.
+      // Slow path: the shared IP is limited — route through Tor. Tor rotates
+      // the egress IP, but the WordFeud limit also tracks the account (a
+      // rate-limited account stays limited through many fresh exits), so we
+      // also rotate across accounts, each via a fresh Tor circuit, until one
+      // gets through. Preferred account first, then the rest.
       if (results === null && isIpLimited() && TOR_ENABLED) {
-        results = await torSearch(acc, username);
-        if (results) viaTor = true;
+        for (const a of orderedAccounts()) {
+          if (!a.cookie) { try { await loginAccount(a); } catch { /* torLogin will retry */ } }
+          const r = await torSearch(a, username);
+          if (r !== null) { results = r; viaTor = true; torAcc = a; break; } // [] = not found (stop); null = limited/blocked (try next)
+        }
       }
 
       if (results === null) {
@@ -1337,7 +1344,7 @@ const server = http.createServer(async (req, res) => {
           ok: false, rateLimited: true,
           message: isIpLimited()
             ? "WordFeud API-limiet actief (IP)" + (TOR_ENABLED
-                ? " — Tor-fallback mislukt (exit geblokkeerd of ook gelimiteerd)"
+                ? " — Tor-fallback mislukt (alle accounts via Tor ook gelimiteerd)"
                 : " — probeer het over " + Math.ceil((ipLimitedUntil - Date.now()) / 60000) + " min")
             : "WordFeud API error"
         }));
@@ -1347,7 +1354,7 @@ const server = http.createServer(async (req, res) => {
       if (results.length > 0) {
         try {
           if (viaTor) {
-            const created = await torProfile(acc, results[0].id);
+            const created = await torProfile(torAcc, results[0].id);
             if (created) results[0].created = created;
           } else {
             const { body: profileBody } = await apiFetch(acc, WF_BASE + "/wf/user/" + results[0].id + "/profile/", {
