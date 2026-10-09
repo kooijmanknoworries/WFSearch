@@ -1332,7 +1332,8 @@ const server = http.createServer(async (req, res) => {
       // gets through. Preferred account first, then the rest.
       if (results === null && isIpLimited() && TOR_ENABLED) {
         for (const a of orderedAccounts()) {
-          if (!a.cookie) { try { await loginAccount(a); } catch { /* torLogin will retry */ } }
+          // torSearch logs in via Tor itself when needed (a direct login would
+          // leave from the same limited IP), so we just hand it the account.
           const r = await torSearch(a, username);
           if (r !== null) { results = r; viaTor = true; torAcc = a; break; } // [] = not found (stop); null = limited/blocked (try next)
         }
