@@ -17,7 +17,9 @@ export const TOR_SOCKS_PORT = Number(process.env.TOR_SOCKS_PORT || 9050);
 export const TOR_CONTROL_PORT = Number(process.env.TOR_CONTROL_PORT || 9051);
 const TOR_DATA_DIR = process.env.TOR_DATA_DIR || "/data/tor";
 const TOR_RC_FILE = path.join(TOR_DATA_DIR, "torrc");
-const TOR_COOKIE_FILE = path.join(TOR_DATA_DIR, "control.authcookie");
+// Tor writes the control cookie as "control_auth_cookie" (0.4.5+) but older
+// releases used "control.authcookie". readCookie() tries both.
+const TOR_COOKIE_FILE = path.join(TOR_DATA_DIR, "control_auth_cookie");
 const TOR_BIN = fs.existsSync("/usr/sbin/tor") ? "/usr/sbin/tor" : "tor";
 const WF_BASE = process.env.WF_BASE_URL || "https://api.wordfeud.com";
 
@@ -60,12 +62,13 @@ export function ensureTor() {
     proc.stdout.on("data", onData);
     proc.stderr.on("data", onData);
     // Tor logs bootstrap progress to its log file (not stdout), so poll the
-    // control port: once it answers, wait for "PROGRESS 100".
+    // control port: once it answers, wait for bootstrap PROGRESS 100. The
+    // control protocol reports it as "PROGRESS=100" (older builds: "PROGRESS 100").
     const t0 = Date.now();
     const poll = setInterval(async () => {
       try {
         const line = await controlCmd("GETINFO status/bootstrap-phase");
-        if (line.includes("PROGRESS 100")) {
+        if (/PROGRESS[= ]100\b/.test(line)) {
           clearInterval(poll);
           settled = true; torReady = true; torStarting = null;
           console.log("[tor] ready (bootstrap " + Math.round((Date.now() - t0) / 1000) + "s)");
@@ -83,13 +86,22 @@ export function ensureTor() {
   return torStarting;
 }
 
+// Read the control cookie, tolerating Tor's two filename conventions. The
+// cookie is only written once Tor has started, so resolve it here (not at
+// module load) rather than relying on a single hard-coded path.
+function readCookie() {
+  for (const p of [TOR_COOKIE_FILE, path.join(TOR_DATA_DIR, "control_auth_cookie"), path.join(TOR_DATA_DIR, "control.authcookie")]) {
+    try { return fs.readFileSync(p); } catch { /* try next */ }
+  }
+  return null;
+}
+
 // One command on the Tor control port (cookie auth). Resolves with the first
 // response line; rejects on auth/timeout errors.
 function controlCmd(cmd) {
   return new Promise((resolve, reject) => {
-    let cookie;
-    try { cookie = fs.readFileSync(TOR_COOKIE_FILE); }
-    catch (e) { return reject(new Error("no tor auth cookie: " + e.message)); }
+    const cookie = readCookie();
+    if (!cookie) return reject(new Error("no tor auth cookie"));
     const s = net.connect(TOR_CONTROL_PORT, "127.0.0.1");
     const done = (err, val) => { s.destroy(); err ? reject(err) : resolve(val); };
     let buf = "", authed = false;
