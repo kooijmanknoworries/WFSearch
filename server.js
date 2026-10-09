@@ -2,8 +2,10 @@ import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { TOR_ENABLED, torSearch, torProfile, torStatus } from "./tor.js";
 
-const PORT = 8011;
+const PORT = Number(process.env.PORT) || 8011;
+const WF_BASE = process.env.WF_BASE_URL || "https://api.wordfeud.com";
 
 const HTML = `<!DOCTYPE html>
 <html lang="nl">
@@ -648,29 +650,37 @@ function generateVariations(name) {
 // ---- Search button availability (shared IP limit, live) ----
 // WordFeud limits per IP address and every account goes out from this server,
 // so they all share ONE limit window — switching accounts can't bypass it.
-// The button is disabled exactly while the server reports the IP as limited,
-// with a live countdown; it re-enables automatically as soon as the server's
-// background re-check clears the limit.
+// While the IP is limited the server routes searches through Tor (a fresh
+// exit IP), so the button stays available — it just labels itself as such.
+// Only when Tor is disabled does the button lock with a live countdown until
+// the server's background re-check clears the limit.
 let searching = false;       // true while a search batch is running
 let d_ipLimitedUntil = 0;    // shared IP limit (epoch ms, 0 = free)
-let accountPollTimer = null; // extra-fast poll while the button is blocked
+let d_torEnabled = false;    // server has the Tor fallback available
+let accountPollTimer = null; // extra-fast poll while the limit is active
 function ipLimited() { return d_ipLimitedUntil > Date.now(); }
 function renderSearchBtnState() {
   if (searching) return; // don't touch the button while a batch is running
   if (ipLimited()) {
-    searchBtn.disabled = true;
-    searchBtn.classList.add("locked");
-    const s = Math.max(0, Math.ceil((d_ipLimitedUntil - Date.now()) / 1000));
-    searchBtn.textContent = "API-limiet (IP) — " +
-      Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") +
-      " · geldt voor alle accounts";
+    if (d_torEnabled) {
+      searchBtn.disabled = false;
+      searchBtn.classList.remove("locked");
+      searchBtn.textContent = "Zoek Alle (via Tor)";
+    } else {
+      searchBtn.disabled = true;
+      searchBtn.classList.add("locked");
+      const s = Math.max(0, Math.ceil((d_ipLimitedUntil - Date.now()) / 1000));
+      searchBtn.textContent = "API-limiet (IP) — " +
+        Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") +
+        " · geldt voor alle accounts";
+    }
   } else {
     searchBtn.disabled = false;
     searchBtn.classList.remove("locked");
     searchBtn.textContent = "Zoek Alle";
   }
-  // Poll more often while blocked so we notice the limit clearing promptly;
-  // go back to the normal 30s cadence once the button is available.
+  // Poll more often while limited so we notice the limit clearing promptly;
+  // go back to the normal 30s cadence once the limit is gone.
   if (ipLimited() && !accountPollTimer) {
     accountPollTimer = setInterval(refreshAccounts, 10000);
   } else if (!ipLimited() && accountPollTimer) {
@@ -680,7 +690,7 @@ function renderSearchBtnState() {
 }
 
 searchBtn.addEventListener("click", async () => {
-  if (searching || ipLimited()) return;
+  if (searching || (ipLimited() && !d_torEnabled)) return;
   const namesInput = document.getElementById("names").value.trim();
   const selectedName = letterDropdown.value;
   const selectedPopular = popularDropdown.value;
@@ -695,24 +705,33 @@ searchBtn.addEventListener("click", async () => {
     showToast("Selecteer een naam of plak namen hierboven");
     return;
   }
+  // Resume-friendly: skip names already searched in a previous run (e.g. after
+  // the batch was interrupted by the API limit). Only names ALREADY in the set
+  // count — this run's base names are added below, so they are never skipped.
+  const alreadyDone = new Set(list.filter(n => searchedSet.has(normName(n))));
   // Remember the base name(s) you asked to search for, so they show red in the menus
   const baseNames = (selectedPopular || selectedName) ? [selectedPopular || selectedName] : list;
   for (const n of baseNames) searchedSet.add(normName(n));
   saveSearched();
   markMenuOptions();
   updateLookupBar();
+  const todo = list.filter(n => !alreadyDone.has(n));
+  if (todo.length === 0) {
+    showToast("Alles al eerder doorzocht — begin een nieuwe naam");
+    return;
+  }
   searching = true;
   searchBtn.disabled = true;
-  searchBtn.textContent = "Zoek " + list.length + " namen…";
+  searchBtn.textContent = "Zoek " + todo.length + " namen…";
   lastApiError = null;
   const banner = document.getElementById("searchBanner");
   banner.style.display = "none";
   let found = 0, tooOld = 0, notFound = 0, apiErrors = 0;
-  for (const name of list) {
+  for (const name of todo) {
     const result = await searchUser(name);
     if (result === -3) {
-      // The shared IP is rate-limited — stop the batch immediately, refresh the
-      // limit data, and block the button with a live countdown.
+      // The Tor fallback couldn't get through either — stop the batch. The
+      // remaining names stay skipped, so clicking the button again resumes.
       apiErrors++;
       renderGallery();
       searching = false;
@@ -723,14 +742,15 @@ searchBtn.addEventListener("click", async () => {
       banner.innerHTML = '<span class="stat">' + found + ' gevonden</span>' +
         (notFound ? '<span class="stat">' + notFound + ' niet gevonden</span>' : '') +
         '<span class="stat" style="color:#b71c1c">⚠ ' + (lastApiError || "WordFeud API-limiet bereikt") +
-        ' — geldt voor alle accounts</span>';
+        (d_torEnabled ? ' — ook via Tor geen doorkomst, probeer het straks opnieuw' : ' — geldt voor alle accounts') + '</span>';
       return;
     }
     if (result === 1) { found++; renderGallery(); }
     else if (result === -1) tooOld++;
     else if (result === -2) apiErrors++;
     else notFound++;
-    searchBtn.textContent = "Zoeken… (" + (found + tooOld + notFound + apiErrors) + "/" + list.length + ")";
+    searchBtn.textContent = (d_torEnabled && ipLimited() ? "Zoeken via Tor… " : "Zoeken… ") +
+      "(" + (found + tooOld + notFound + apiErrors) + "/" + todo.length + ")";
   }
   renderGallery();
   searching = false;
@@ -875,11 +895,14 @@ function renderAccounts(accounts) {
         if (!d.ok) throw new Error(d.error || "switch failed");
         d_accounts = d.accounts;
         d_ipLimitedUntil = d.ipLimitedUntil || 0;
+        d_torEnabled = !!(d.tor && d.tor.enabled);
         renderAccounts(d.accounts);
         renderRateBadges();
         renderSearchBtnState(); // button reflects the shared IP limit
         if (d_ipLimitedUntil > Date.now()) {
-          accountMsg("API-limiet (IP) geldt voor alle accounts — wacht tot de limiet verlopen is", "err");
+          accountMsg(d_torEnabled
+            ? "API-limiet (IP) actief — zoekingen gaan nu via Tor (iets langzamer)"
+            : "API-limiet (IP) geldt voor alle accounts — wacht tot de limiet verlopen is", d_torEnabled ? "ok" : "err");
         } else {
           accountMsg("Zoek nu met " + a.label, "ok");
         }
@@ -926,6 +949,7 @@ async function refreshAccounts() {
     if (d.ok) {
       d_accounts = d.accounts;
       d_ipLimitedUntil = d.ipLimitedUntil || 0;
+      d_torEnabled = !!(d.tor && d.tor.enabled);
       renderAccounts(d.accounts);
       renderRateBadges();
       renderSearchBtnState(); // keep the button in sync with the fresh account data
@@ -1051,7 +1075,7 @@ async function probeIpLimit() {
     if (!acc.cookie) continue;
     let res;
     try {
-      res = await fetch("https://api.wordfeud.com/wf/user/search/", {
+      res = await fetch(WF_BASE + "/wf/user/search/", {
         method: "POST",
         headers: {
           "Accept": "application/json", "Content-Type": "application/json",
@@ -1073,7 +1097,7 @@ async function probeIpLimit() {
 
 async function loginAccount(acc) {
   const hashedPassword = crypto.createHash("sha1").update(acc.password + "JarJarBinks9").digest("hex");
-  const res = await fetch("https://api.wordfeud.com/wf/user/login/email/", {
+  const res = await fetch(WF_BASE + "/wf/user/login/email/", {
     method: "POST",
     headers: { "Accept": "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ email: acc.email, password: hashedPassword })
@@ -1119,6 +1143,7 @@ function accountSummary() {
       rateLimitedUntil: a.rateLimitedUntil || 0, // 0 = not limited, else epoch ms
     })),
     ipLimitedUntil: ipLimitedUntil || 0, // shared IP limit (0 = free)
+    tor: torStatus(), // { enabled, ready, starting } — Tor fallback state
   };
 }
 
@@ -1256,18 +1281,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      // All accounts share the server's IP, so they share ONE rate-limit
-      // window. If we already know the IP is limited, answer immediately with
-      // no API call (the background probe re-checks until it clears).
-      if (isIpLimited()) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({
-          ok: false, rateLimited: true,
-          message: "WordFeud API-limiet actief (IP) — probeer het over " +
-            Math.ceil((ipLimitedUntil - Date.now()) / 60000) + " min"
-        }));
-      }
-
       const apiFetch = (acc, url, options) => fetch(url, {
         ...options,
         headers: { ...options.headers, "Cookie": "sessionid=" + acc.cookie }
@@ -1277,44 +1290,71 @@ const server = http.createServer(async (req, res) => {
         return { body: b, rateLimited: limited };
       });
 
-      // Search with the preferred account; if it hits the shared limit, record
-      // it and report back (switching accounts would hit the same IP limit).
       const acc = orderedAccounts()[0];
       if (!acc.cookie) {
-        try { await loginAccount(acc); } catch (e) {
-          res.writeHead(502, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ ok: false, message: "WordFeud API error: " + e.message }));
+        // Best effort: a login failure is not fatal while the IP is limited,
+        // because the Tor fallback logs in on its own.
+        try { await loginAccount(acc); } catch { /* Tor path re-logs in */ }
+      }
+
+      let results = null;
+      let viaTor = false;
+
+      // Fast path: direct search while the IP is not known to be limited.
+      if (!isIpLimited()) {
+        const { body: searchBody, rateLimited: searchLimited } = await apiFetch(acc, WF_BASE + "/wf/user/search/", {
+          method: "POST",
+          headers: { "Accept": "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ username_or_email: username })
+        });
+        if (searchLimited) {
+          markRateLimited(acc); // record the shared window so the UI can show it
+        } else if (searchBody?.status === "error") {
+          acc.cookie = null; // bad session; will re-login on the next search
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ ok: false, message: "WordFeud API error: " + (searchBody.content?.type ?? "search failed") }));
+        } else {
+          // A valid, non-limited response: the IP is clearly usable, so clear
+          // any stale limit flag.
+          clearRateLimits();
+          results = (searchBody?.content?.result ?? []).map(u => ({
+            id: u.user_id ?? u.id,
+            username: u.username
+          }));
         }
       }
-      const { body: searchBody, rateLimited: searchLimited } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/search/", {
-        method: "POST",
-        headers: { "Accept": "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ username_or_email: username })
-      });
-      if (searchLimited) {
-        markRateLimited(acc); // record the shared window so the UI can show it
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ ok: false, rateLimited: true, message: "WordFeud API-limiet bereikt" }));
+
+      // Slow path: the shared IP is limited — route through a fresh Tor
+      // circuit so the request leaves from a different IP.
+      if (results === null && isIpLimited() && TOR_ENABLED) {
+        results = await torSearch(acc, username);
+        if (results) viaTor = true;
       }
-      if (searchBody?.status === "error") {
-        acc.cookie = null; // bad session; will re-login on the next search
+
+      if (results === null) {
         res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ ok: false, message: "WordFeud API error: " + (searchBody.content?.type ?? "search failed") }));
+        return res.end(JSON.stringify({
+          ok: false, rateLimited: true,
+          message: isIpLimited()
+            ? "WordFeud API-limiet actief (IP)" + (TOR_ENABLED
+                ? " — Tor-fallback mislukt (exit geblokkeerd of ook gelimiteerd)"
+                : " — probeer het over " + Math.ceil((ipLimitedUntil - Date.now()) / 60000) + " min")
+            : "WordFeud API error"
+        }));
       }
-      // success (or "not found" — a valid, non-limited response): the IP is
-      // clearly usable, so clear any stale limit flag.
-      clearRateLimits();
-      const results = (searchBody?.content?.result ?? []).map(u => ({
-        id: u.user_id ?? u.id,
-        username: u.username
-      }));
+
+      // Account age (one extra call; via Tor too, since the IP is limited).
       if (results.length > 0) {
-        const userId = results[0].id;
         try {
-          const { body: profileBody } = await apiFetch(acc, "https://api.wordfeud.com/wf/user/" + userId + "/profile/", {
-            headers: { "Accept": "application/json" }
-          });
-          if (profileBody?.content?.created) results[0].created = profileBody.content.created;
+          if (viaTor) {
+            const created = await torProfile(acc, results[0].id);
+            if (created) results[0].created = created;
+          } else {
+            const { body: profileBody } = await apiFetch(acc, WF_BASE + "/wf/user/" + results[0].id + "/profile/", {
+              headers: { "Accept": "application/json" }
+            });
+            if (profileBody?.content?.created) results[0].created = profileBody.content.created;
+          }
         } catch {
           // profile fetch failed, continue without account age
         }
@@ -1324,7 +1364,8 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({
         ok: results.length > 0,
         message: results.length === 0 ? "No users found" : undefined,
-        results
+        results,
+        viaTor: viaTor || undefined
       }));
     } catch (err) {
       res.writeHead(502, { "Content-Type": "application/json" });

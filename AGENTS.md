@@ -43,3 +43,44 @@ and the served HTML then contains a single backslash as intended.
 Symptom of a regression: the filter bar finds nothing for names containing "s"
 (typing "samantha" shows "amatha"). Always verify the *served* HTML — `curl` the
 running app and grep the regex — never trust the source file alone.
+
+## Rate limit is per-IP, not per-account — and how Tor bypasses it
+
+WordFeud rate-limits by **IP address** (~5 min rolling window), and every account
+goes out from this same server. So all accounts share ONE limit window — switching
+accounts can't bypass it. The model is:
+- `ipLimitedUntil` (in `server.js`) is the single source of truth. When any search
+  gets a `limit_exceed` response, `markRateLimited` sets it once and mirrors it onto
+  every account (so the per-account badges stay consistent).
+- `probeIpLimit()` re-checks the whole IP with **one** probe call, but only runs
+  on a 30s timer while the IP is actually limited (not constantly).
+- `GET /api/accounts` returns `ipLimitedUntil` and `tor: { enabled, ready, starting }`.
+- The frontend disables the search button with a live countdown while limited, and
+  keeps it available while limited **if Tor is enabled** (labelled "via Tor").
+
+### Tor fallback (`tor.js`)
+When the shared IP is limited, `/search` routes the request through a **local Tor
+circuit** so it leaves from a different exit IP:
+- `tor.js` spawns Tor as a child process (lazy, on first limited request) bound to
+  `127.0.0.1` inside the container: SOCKS `:9050`, control `:9051` (cookie auth).
+  State lives under `/data/tor` (the `./data:/data` mount), so it survives rebuilds.
+- Because Node's `fetch` can't speak SOCKS, Tor requests go through a `curl
+  --socks5-hostname` subprocess (`torFetch`). `Dockerfile` therefore adds `tor curl`.
+- `torSearch` tries up to 2 circuits; the second runs `SIGNAL NEWNYM` first to rotate
+  to a fresh exit (in case the first exit is itself blocked/limited). It logs in via
+  Tor if there's no valid session for that exit.
+- Disable with env `TOR_ENABLED=0` (falls back to the old "wait N min" behavior).
+
+**Testing without real Tor:** the Tor fallback is exercised end-to-end with a mock
+WordFeud API + a real (minimal) SOCKS5 proxy + a fake Tor control port + a fake
+`tor` binary. The SOCKS CONNECT reply must be 10 bytes with ATYP=`1` (IPv4) or
+curl hangs. See the two-mock design (direct mock = limited, tor mock = ok, SOCKS
+tunnels to the tor mock) — do NOT try to tag requests with an injected header;
+Node's HTTP parser rejects it (400).
+
+### Note on `package.json` / module type
+The app has **no `package.json`**. `server.js` and `tor.js` use ESM `import`, which
+works because Node 22 auto-detects module syntax ("detect-module") and runs `.js`
+files as ESM when there's no `package.json` to pin the type. Do NOT add a
+`package.json` with `"type":"commonjs"` — that would break every `import`. If you
+must add one, set `"type":"module"`.
