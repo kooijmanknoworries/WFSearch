@@ -45,7 +45,9 @@ export function ensureTor() {
         "DataDirectory " + TOR_DATA_DIR,
         "AvoidDiskWrites 1",
         "Log notice file " + path.join(TOR_DATA_DIR, "tor.log"),
-        "RunAsDaemon no",
+        // Foreground child process we manage directly; Tor 0.4.9+ only
+        // accepts 0/1 here ("no" is rejected and Tor exits before bootstrap).
+        "RunAsDaemon 0",
       ].join("\n") + "\n");
     } catch (e) { return fail(new Error("tor setup: " + e.message)); }
     const proc = spawn(TOR_BIN, ["-f", TOR_RC_FILE], { stdio: ["ignore", "pipe", "pipe"] });
