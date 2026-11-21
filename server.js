@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { TOR_ENABLED, torSearch, torProfile, torStatus } from "./tor.js";
+import { TOR_ENABLED, ensureTor, torSearch, torProfile, torStatus } from "./tor.js";
 
 const PORT = Number(process.env.PORT) || 8011;
 const WF_BASE = process.env.WF_BASE_URL || "https://api.wordfeud.com";
@@ -1057,7 +1057,19 @@ function isIpLimited() { return ipLimitedUntil > Date.now(); }
 function markRateLimited(acc, ms) {
   ipLimitedUntil = Date.now() + (ms || RATE_LIMIT_MS);
   for (const a of ACCOUNTS) a.rateLimitedUntil = ipLimitedUntil;
-  acc.cookie = null; // drop the session; we re-login once the window clears
+  // Keep the session cookie: the limit is per-account, not per-session, so
+  // the session stays valid. Wiping it here forced a costly re-login through
+  // Tor on the very next Tor search.
+}
+// Last account that got through via Tor. The limit is per-account, so this
+// one is by definition NOT limited (for now) — try it FIRST on the next Tor
+// search and skip the known-limited accounts' failed attempts.
+let torWorkingLabel = null;
+function torOrderedAccounts() {
+  const list = orderedAccounts();
+  const w = list.find(a => a.label === torWorkingLabel);
+  if (!w) return list;
+  return [w, ...list.filter(a => a !== w)];
 }
 function clearRateLimits() {
   ipLimitedUntil = 0;
@@ -1144,6 +1156,7 @@ function accountSummary() {
     })),
     ipLimitedUntil: ipLimitedUntil || 0, // shared IP limit (0 = free)
     tor: torStatus(), // { enabled, ready, starting } — Tor fallback state
+    torWorking: torWorkingLabel || null, // account that got through via Tor last
   };
 }
 
@@ -1210,6 +1223,9 @@ async function handleAccounts(req, res, url, jsonBody) {
 
 // Login all accounts in the background at startup so switching is instant.
 Promise.allSettled(orderedAccounts().map(loginAccount));
+// Pre-warm Tor at startup (background) so its one-time bootstrap (5-40s)
+// never lands on a user's search. Also re-triggered on first limit detection.
+if (TOR_ENABLED) ensureTor().catch(() => {});
 
 // Background re-check: while the shared IP is rate-limited, probe once every
 // 30s until it clears (one probe tells us the state of all accounts). When the
@@ -1310,6 +1326,9 @@ const server = http.createServer(async (req, res) => {
         });
         if (searchLimited) {
           markRateLimited(acc); // record the shared window so the UI can show it
+          // Pre-warm Tor in the background NOW (first limit detected) so its
+          // bootstrap doesn't land on the first Tor search below.
+          ensureTor().catch(() => {});
         } else if (searchBody?.status === "error") {
           acc.cookie = null; // bad session; will re-login on the next search
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -1325,17 +1344,21 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      // Slow path: the shared IP is limited — route through Tor. Tor rotates
-      // the egress IP, but the WordFeud limit also tracks the account (a
-      // rate-limited account stays limited through many fresh exits), so we
-      // also rotate across accounts, each via a fresh Tor circuit, until one
-      // gets through. Preferred account first, then the rest.
+      // Slow path: the shared IP is limited — route through Tor. The WordFeud
+      // limit is per-ACCOUNT (a limited account stays limited through many
+      // fresh exits), so we rotate across accounts until one gets through.
+      // The account that succeeded last time is tried first (it is by
+      // definition not limited), so most searches finish in ONE attempt with
+      // no circuit rotation. Exit-level failures (WAF, network) are handled
+      // inside torSearch (poison the circuit, rotate, retry once).
       if (results === null && isIpLimited() && TOR_ENABLED) {
-        for (const a of orderedAccounts()) {
-          // torSearch logs in via Tor itself when needed (a direct login would
-          // leave from the same limited IP), so we just hand it the account.
+        for (const a of torOrderedAccounts()) {
           const r = await torSearch(a, username);
-          if (r !== null) { results = r; viaTor = true; torAcc = a; break; } // [] = not found (stop); null = limited/blocked (try next)
+          if (r !== null) {
+            results = r; viaTor = true; torAcc = a;
+            torWorkingLabel = a.label; // remember: not limited (for now)
+            break; // [] = not found (stop); null = limited/blocked (try next)
+          }
         }
       }
 
