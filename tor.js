@@ -28,64 +28,74 @@ const WF_BASE = process.env.WF_BASE_URL || "https://api.wordfeud.com";
 
 let torReady = false;
 let torStarting = null;
+const BOOTSTRAP_TIMEOUT_MS = 40000;
 
 export function torStatus() {
   return { enabled: TOR_ENABLED, ready: torReady, starting: !!torStarting };
 }
 
-// Start Tor and wait (up to ~40s) until its control port reports a fully
-// built bootstrap. Safe to call concurrently.
+// Poll the control port until Tor reports bootstrap PROGRESS=100 (bounded).
+// The value arrives on a "250-..." header line of the GETINFO reply, so
+// controlCmd must include those lines (see there).
+async function waitBootstrap(t0) {
+  for (;;) {
+    try {
+      const reply = await controlCmd("GETINFO status/bootstrap-phase");
+      if (/PROGRESS[= ]100\b/.test(reply)) {
+        torReady = true;
+        console.log("[tor] ready (bootstrap " + Math.round((Date.now() - t0) / 1000) + "s)");
+        return;
+      }
+    } catch { /* control port or cookie not ready yet — keep polling */ }
+    if (Date.now() - t0 > BOOTSTRAP_TIMEOUT_MS) throw new Error("tor bootstrap timeout");
+    await new Promise(r => setTimeout(r, 750));
+  }
+}
+
+// Start Tor and wait until its control port reports a fully built bootstrap.
+// Safe to call concurrently.
 export function ensureTor() {
   if (torReady) return Promise.resolve();
   if (torStarting) return torStarting;
-  torStarting = new Promise((resolve, reject) => {
-    let settled = false;
-    const fail = (e) => { if (!settled) { settled = true; torStarting = null; reject(e); } };
-    try {
-      fs.mkdirSync(TOR_DATA_DIR, { recursive: true });
-      fs.writeFileSync(TOR_RC_FILE, [
-        "SocksPort 127.0.0.1:" + TOR_SOCKS_PORT,
-        "ControlPort 127.0.0.1:" + TOR_CONTROL_PORT,
-        "CookieAuthentication 1",
-        "DataDirectory " + TOR_DATA_DIR,
-        "AvoidDiskWrites 1",
-        "Log notice file " + path.join(TOR_DATA_DIR, "tor.log"),
-        // Foreground child process we manage directly; Tor 0.4.9+ only
-        // accepts 0/1 here ("no" is rejected and Tor exits before bootstrap).
-        "RunAsDaemon 0",
-      ].join("\n") + "\n");
-    } catch (e) { return fail(new Error("tor setup: " + e.message)); }
-    const proc = spawn(TOR_BIN, ["-f", TOR_RC_FILE], { stdio: ["ignore", "pipe", "pipe"] });
-    proc.on("error", (e) => fail(new Error("tor start: " + (e.code === "ENOENT" ? "tor binary not found" : e.message))));
-    proc.on("exit", () => {
-      torReady = false;
-      if (!settled) fail(new Error("tor exited before bootstrap"));
-    });
-    const onData = (d) => console.log("[tor]", d.toString().trim());
-    proc.stdout.on("data", onData);
-    proc.stderr.on("data", onData);
-    // Tor logs bootstrap progress to its log file (not stdout), so poll the
-    // control port: once it answers, wait for bootstrap PROGRESS 100. The
-    // control protocol reports it as "PROGRESS=100" (older builds: "PROGRESS 100").
+  torStarting = (async () => {
     const t0 = Date.now();
-    const poll = setInterval(async () => {
-      try {
-        const line = await controlCmd("GETINFO status/bootstrap-phase");
-        if (/PROGRESS[= ]100\b/.test(line)) {
-          clearInterval(poll);
-          settled = true; torReady = true; torStarting = null;
-          console.log("[tor] ready (bootstrap " + Math.round((Date.now() - t0) / 1000) + "s)");
-          resolve();
-        }
-      } catch {
-        // control port not up (or cookie not written) yet — keep polling
+    try {
+      let procDead = null;
+      // Probe first: a previous wait may have timed out even though Tor
+      // finished bootstrapping right after the bound. Reusing the running
+      // process matters — a second Tor with the same DataDirectory refuses
+      // to start, which would break the very search that triggered it.
+      try { await controlCmd("GETINFO version"); }
+      catch {
+        try {
+          fs.mkdirSync(TOR_DATA_DIR, { recursive: true });
+          fs.writeFileSync(TOR_RC_FILE, [
+            "SocksPort 127.0.0.1:" + TOR_SOCKS_PORT,
+            "ControlPort 127.0.0.1:" + TOR_CONTROL_PORT,
+            "CookieAuthentication 1",
+            "DataDirectory " + TOR_DATA_DIR,
+            "AvoidDiskWrites 1",
+            "Log notice file " + path.join(TOR_DATA_DIR, "tor.log"),
+            // Foreground child process we manage directly; Tor 0.4.9+ only
+            // accepts 0/1 here ("no" is rejected and Tor exits before bootstrap).
+            "RunAsDaemon 0",
+          ].join("\n") + "\n");
+        } catch (e) { throw new Error("tor setup: " + e.message); }
+        const proc = spawn(TOR_BIN, ["-f", TOR_RC_FILE], { stdio: ["ignore", "pipe", "pipe"] });
+        const onData = (d) => console.log("[tor]", d.toString().trim());
+        proc.stdout.on("data", onData);
+        proc.stderr.on("data", onData);
+        proc.on("exit", () => { torReady = false; });
+        procDead = new Promise((_, reject) => {
+          proc.on("error", (e) => reject(new Error("tor start: " + (e.code === "ENOENT" ? "tor binary not found" : e.message))));
+          proc.on("exit", (code) => reject(new Error("tor exited before bootstrap (code " + code + ")")));
+        });
       }
-      if (Date.now() - t0 > 40000) {
-        clearInterval(poll);
-        fail(new Error("tor bootstrap timeout"));
-      }
-    }, 750);
-  });
+      await Promise.race([waitBootstrap(t0), procDead]);
+    } finally {
+      torStarting = null;
+    }
+  })();
   return torStarting;
 }
 
@@ -100,8 +110,10 @@ function readCookie() {
 }
 
 // One command on the Tor control port (cookie auth). Resolves with the FULL
-// response text (multi-line replies end with a "250 done" line); rejects on
-// auth/timeout errors.
+// response text; rejects on auth/timeout errors. Multi-line replies are
+// "250-<data>" header + data lines + a final "250 ..." line — every part
+// goes into the returned text, because GETINFO returns its value on the
+// "250-..." header line (e.g. "250-status/bootstrap-phase=...PROGRESS=100").
 function controlCmd(cmd) {
   return new Promise((resolve, reject) => {
     const cookie = readCookie();
@@ -121,12 +133,12 @@ function controlCmd(cmd) {
           else return done(new Error("tor auth failed: " + line));
           continue;
         }
-        if (line.startsWith("250-")) continue; // multi-line reply header
+        if (line.startsWith("250-")) { reply += line.slice(3) + "\n"; continue; }
         if (line.startsWith("250 ") || line === "250") {
           // terminal status line — the full reply has arrived
           return done(null, reply + line);
         }
-        reply += line + "\n"; // data line (circuit, bootstrap info, ...)
+        reply += line + "\n"; // data line (circuit, ...)
       }
     });
     s.on("error", (e) => { clearTimeout(t); done(e); });

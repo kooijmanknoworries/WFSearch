@@ -167,7 +167,9 @@ function controlServer() {
           s.write("250 OK\r\n");
         } else if (line.startsWith("GETINFO status/bootstrap-phase")) {
           state.bootstraps++;
-          s.write("250 status/bootstrap-phase=NOTICE BOOTSTRAP=1 DONE PROGRESS=100 TAG=done\r\n");
+          // Real Tor answers GETINFO with a multi-line "250-..." header
+          // carrying the value, then a terminal "250 done" line.
+          s.write("250-status/bootstrap-phase=NOTICE BOOTSTRAP=1 DONE PROGRESS=100 TAG=done\r\n250 done\r\n");
         } else if (line.startsWith("CIRC LIST BUILT")) {
           s.write("250-\r\nS 0~1234 BUILT 1.2.3.4 9001 5.6.7.8 80\r\n250 done\r\n");
         } else s.write("250 OK\r\n");
