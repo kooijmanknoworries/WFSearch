@@ -1,7 +1,10 @@
 // Tor fallback for the WordFeud rate limit (see /search in server.js).
-// WordFeud limits per IP; when this server's IP is limited, requests are
-// routed through a local Tor circuit so they leave from a different exit IP.
-// Tor is a child process, started lazily on first use, bound to 127.0.0.1
+// WordFeud rate-limits per ACCOUNT (verified live: a limited account stays
+// limited through many fresh Tor exits, while another account succeeds on its
+// first exit). When the limit flag is set, requests are routed through a local
+// Tor circuit; rotating the circuit mainly helps against exit-level blocks
+// (WAF, an exit IP that is itself limited).
+// Tor is a child process, started lazily (pre-warmed at startup), bound to 127.0.0.1
 // inside the container (SOCKS :9050, control :9051 with cookie auth). State
 // lives under TOR_DATA_DIR (mounted /data in the container) so it survives
 // rebuilds. Needs the `tor` and `curl` binaries (see Dockerfile).
@@ -96,15 +99,16 @@ function readCookie() {
   return null;
 }
 
-// One command on the Tor control port (cookie auth). Resolves with the first
-// response line; rejects on auth/timeout errors.
+// One command on the Tor control port (cookie auth). Resolves with the FULL
+// response text (multi-line replies end with a "250 done" line); rejects on
+// auth/timeout errors.
 function controlCmd(cmd) {
   return new Promise((resolve, reject) => {
     const cookie = readCookie();
     if (!cookie) return reject(new Error("no tor auth cookie"));
     const s = net.connect(TOR_CONTROL_PORT, "127.0.0.1");
     const done = (err, val) => { s.destroy(); err ? reject(err) : resolve(val); };
-    let buf = "", authed = false;
+    let buf = "", authed = false, reply = "";
     const t = setTimeout(() => done(new Error("tor control timeout")), 8000);
     s.on("connect", () => s.write("AUTHENTICATE " + cookie.toString("hex") + "\r\n"));
     s.on("data", (d) => {
@@ -117,19 +121,33 @@ function controlCmd(cmd) {
           else return done(new Error("tor auth failed: " + line));
           continue;
         }
-        clearTimeout(t);
-        return done(null, line);
+        if (line.startsWith("250-")) continue; // multi-line reply header
+        if (line.startsWith("250 ") || line === "250") {
+          // terminal status line — the full reply has arrived
+          return done(null, reply + line);
+        }
+        reply += line + "\n"; // data line (circuit, bootstrap info, ...)
       }
     });
     s.on("error", (e) => { clearTimeout(t); done(e); });
   });
 }
 
-// Rotate the circuit so the next request leaves from a new exit IP, then give
-// Tor a moment to build it.
+// Rotate to a fresh circuit (new exit IP) and wait until Tor reports a built
+// circuit, instead of a fixed sleep. Normally a couple of seconds; bounded so
+// a stuck bootstrap can't wedge a search.
 async function torNewnym() {
   await controlCmd("SIGNAL NEWNYM");
-  await new Promise(r => setTimeout(r, 6000));
+  const t0 = Date.now();
+  while (Date.now() - t0 < 15000) {
+    try {
+      const reply = await controlCmd("CIRC LIST BUILT");
+      // Reply: "250-" header, one line per built circuit, "250 done".
+      const hasCircuit = reply.split("\n").some(l => l !== "" && !l.startsWith("250"));
+      if (hasCircuit) return;
+    } catch { /* control blip — keep polling */ }
+    await new Promise(r => setTimeout(r, 500));
+  }
 }
 
 // One HTTPS request through the local Tor SOCKS proxy via curl (Node's fetch
@@ -184,47 +202,83 @@ async function torLogin(acc) {
 // loginAccount in server.js.
 function wfPasswordHash(s) { return crypto.createHash("sha1").update(s).digest("hex"); }
 
-// One search through a (possibly new) Tor circuit. Up to 2 attempts; the
-// second uses a fresh circuit (SIGNAL NEWNYM). Returns the result list
-// [{id, username}] on success, or null on any failure (tor down, exit
-// blocked, exit itself limited, API error). `acc` is updated in place with
-// a Tor-obtained session cookie.
+// ---- Circuit health tracking --------------------------------------------
+// A circuit whose exit WAF-blocked or whose curl request failed is
+// "poisoned" until the next rotation. The key insight behind the speedup:
+// the WordFeud limit is per-ACCOUNT, so an exit answering limit_exceed for
+// account X will keep doing so — a fresh circuit cannot help THAT account.
+// The caller (server.js) therefore moves to the next account immediately,
+// reusing the same (healthy) exit. Only exit-level failures (WAF block,
+// curl/network failure) trigger a circuit rotation + retry of the SAME
+// account, replacing the old "always 2 attempts with a 6s NEWNYM between".
+let poisonedCircuit = false;
+
+function poisonCircuit() { poisonedCircuit = true; }
+function clearCircuitPoison() { poisonedCircuit = false; }
+
+// One search through Tor. Returns the result list [{id, username}] on
+// success (possibly [] = "no users found"), or null on failure (tor down,
+// account limited, exit blocked on both attempts, API error) so the caller
+// can try the next account. `acc` is updated in place with a Tor-obtained
+// session cookie.
 export async function torSearch(acc, username) {
   try {
     await ensureTor();
     if (!acc.cookie) {
-      // Session dropped (or first use): log in via Tor — a direct login would
-      // leave from the same limited IP.
+      // No session (first use, or it genuinely expired): log in via Tor — a
+      // direct login would leave from the limited IP.
       if (!(await torLogin(acc))) { console.log("[tor] could not log in via tor"); return null; }
+    }
+    if (poisonedCircuit) {
+      await torNewnym();
+      clearCircuitPoison(); // rotated: the (new) circuit is untested but fresh
     }
     const payload = JSON.stringify({ username_or_email: username });
     const headers = { "Content-Type": "application/json", "Cookie": "sessionid=" + acc.cookie };
+    // Up to 2 attempts; the second only happens after an EXIT-level failure
+    // (WAF block / network) and runs on a freshly rotated circuit.
+    // An account-level limit_exceed returns immediately (no point rotating).
     for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) await torNewnym();
       const r = await torFetch(WF_BASE + "/wf/user/search/", { method: "POST", headers, body: payload });
-      if (!r.ok) { console.log("[tor] attempt " + (attempt + 1) + ": curl failed (" + r.error + ")"); continue; }
+      if (!r.ok) {
+        console.log("[tor] attempt " + (attempt + 1) + ": curl failed (" + r.error + ")");
+        poisonCircuit();
+        if (attempt > 0) return null;
+        await torNewnym(); clearCircuitPoison();
+        continue;
+      }
       let b = null; try { b = JSON.parse(splitHttp(r.bodyRaw).bodyRaw); } catch { b = null; }
       if (!b || typeof b !== "object") {
         console.log("[tor] attempt " + (attempt + 1) + ": no JSON (WAF block or network)");
+        poisonCircuit(); // this exit is hostile — retry on a fresh one
         if (process.env.TOR_DEBUG) console.error("[tor:dbg] search raw:", JSON.stringify(r.bodyRaw.slice(0, 300)), "curl:", r.ok, r.error);
+        if (attempt > 0) return null;
+        await torNewnym(); clearCircuitPoison();
         continue;
       }
       const t = typeof b.content?.type === "string" ? b.content.type : "";
       if (t === "login_required") {
-        // Session not valid for this exit — log in via Tor and retry inline.
-        if (!(await torLogin(acc))) { console.log("[tor] login via tor failed"); continue; }
+        // Session expired — the exit itself is fine, so re-login via Tor and
+        // retry ONCE on the same circuit.
+        if (!(await torLogin(acc))) { console.log("[tor] re-login via tor failed"); return null; }
         headers.Cookie = "sessionid=" + acc.cookie;
         const r2 = await torFetch(WF_BASE + "/wf/user/search/", { method: "POST", headers, body: payload });
         let b2 = null; if (r2.ok) { try { b2 = JSON.parse(splitHttp(r2.bodyRaw).bodyRaw); } catch { b2 = null; } }
         if (b2 && b2.status === "success") {
-          console.log("[tor] search OK (re-login, circuit " + (attempt + 1) + ")");
+          console.log("[tor] search OK (re-login)");
           return (b2.content?.result ?? []).map(u => ({ id: u.user_id ?? u.id, username: u.username }));
         }
-        continue;
+        return null;
       }
-      if (b.status === "error" && t.includes("limit_exceed")) { console.log("[tor] attempt " + (attempt + 1) + ": exit also limited"); continue; }
-      if (b.status !== "success") { console.log("[tor] attempt " + (attempt + 1) + ": API error " + (t || "unknown")); continue; }
-      console.log("[tor] search OK (circuit " + (attempt + 1) + ")");
+      if (b.status === "error" && t.includes("limit_exceed")) {
+        console.log("[tor] account limited (exit fine)");
+        // Account-level limit: a fresh circuit will NOT help this account,
+        // so the caller should move to the next account. Keep the circuit:
+        // it's a good exit — the next account can reuse it without rotating.
+        return null;
+      }
+      if (b.status !== "success") { console.log("[tor] attempt " + (attempt + 1) + ": API error " + (t || "unknown")); return null; }
+      console.log("[tor] search OK");
       return (b.content?.result ?? []).map(u => ({ id: u.user_id ?? u.id, username: u.username }));
     }
     return null;
