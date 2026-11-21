@@ -91,7 +91,7 @@ export function ensureTor() {
           proc.on("exit", (code) => reject(new Error("tor exited before bootstrap (code " + code + ")")));
         });
       }
-      await Promise.race([waitBootstrap(t0), procDead]);
+      await (procDead ? Promise.race([waitBootstrap(t0), procDead]) : waitBootstrap(t0));
     } finally {
       torStarting = null;
     }
