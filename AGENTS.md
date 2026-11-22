@@ -3,6 +3,11 @@
 Single-file Node.js app (`server.js`, Node 22+, no dependencies) that searches the
 WordFeud API and manages profile galleries. Listens on port **8011** inside the app.
 
+> **Deep reference:** for the full architecture (HTTP API, auth, rate-limit model,
+> Tor internals, testing, deployment, env vars, gotchas) read
+> [`ARCHITECTURE.md`](./ARCHITECTURE.md). This file is the short rules + the
+> hard-won gotchas. Keep the two in sync.
+
 ## Self-hosting (persistent — survives reboots)
 
 The app is deployed on the host as a Docker Compose service, mirroring the `WFHelper`
