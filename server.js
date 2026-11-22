@@ -59,6 +59,7 @@ const HTML = `<!DOCTYPE html>
   .card .invite-btn.invited{background:rgba(76,175,80,.15);color:#2e7d32;border-color:#4caf50;opacity:1}
   .card.invited{border:2px solid #4caf50}
   .card img{width:100%;aspect-ratio:1/1;object-fit:cover;display:block}
+  .card .avatar-ph{width:100%;aspect-ratio:1/1;background:#eee;display:flex;align-items:center;justify-content:center;font-size:3rem;font-weight:700;color:#bbb;display:block}
   .card .info{padding:1rem}
   .card .name{font-size:1.1rem;font-weight:700;margin-bottom:.25rem}
   .card .name.searched{color:#e74c3c}
@@ -178,6 +179,7 @@ const HTML = `<!DOCTYPE html>
     <input id="galleryName" placeholder="Galerijnaam..." />
     <button id="saveGalleryBtn" style="background:#4a4;color:#fff">💾 Opslaan</button>
     <button id="newGalleryBtn" style="background:#2196F3;color:#fff">➕ Nieuw</button>
+    <button id="hideAvatarsBtn" style="background:#777;color:#fff">🙈 Verberg foto's</button>
   </div>
   <div class="gallery-list" id="galleryList"></div>
   <div class="stats" id="stats"></div>
@@ -196,6 +198,19 @@ const galleryListEl = document.getElementById("galleryList");
 const galleryNameInput = document.getElementById("galleryName");
 let galleries = JSON.parse(localStorage.getItem("wf_galleries") || "{}");
 let currentGalleryKey = localStorage.getItem("wf_current_gallery") || "__current__";
+// Setting: hide all avatar photos in the gallery (persisted per browser).
+let hideAvatars = localStorage.getItem("wf_hide_avatars") === "1";
+function setHideAvatars(hide) {
+  hideAvatars = hide;
+  localStorage.setItem("wf_hide_avatars", hide ? "1" : "0");
+  updateHideAvatarsBtn();
+  renderGallery();
+}
+function updateHideAvatarsBtn() {
+  const btn = document.getElementById("hideAvatarsBtn");
+  btn.textContent = hideAvatars ? "👁 Toon foto's" : "🙈 Verberg foto's";
+  btn.style.background = hideAvatars ? "#1565C0" : "#777";
+}
 function saveGalleriesMeta() { localStorage.setItem("wf_galleries", JSON.stringify(galleries)); }
 function saveCurrentGallery() {
   localStorage.setItem("wf_" + currentGalleryKey, JSON.stringify(history));
@@ -462,6 +477,10 @@ function updateLookupBar() {
   }).join(" ");
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function showToast(msg) {
   toast.textContent = msg;
   toast.classList.add("show");
@@ -500,8 +519,14 @@ function renderCard(user) {
   inviteBtn.textContent = invitedSet.has(user.id) ? "✓ Uitgenodigd" : "📨";
   inviteBtn.title = invitedSet.has(user.id) ? "Uitgenodigd" : "Markeer als uitgenodigd";
   inviteBtn.onclick = () => toggleInvite(user.id, card, inviteBtn);
+  let avatar;
+  if (hideAvatars) {
+    avatar = '<div class="avatar-ph">' + escapeHtml(user.username.charAt(0).toUpperCase()) + '</div>';
+  } else {
+    avatar = '<img src="/avatar/' + user.id + '" alt="' + user.username + '" />';
+  }
   card.innerHTML =
-    '<img src="/avatar/' + user.id + '" alt="' + user.username + '" />' +
+    avatar +
     '<div class="info">' +
     '<div class="name' + (isMarked(user.username) ? ' searched' : '') + '">' + user.username + '</div>' +
     '<div class="id">ID: ' + user.id + '</div>' +
@@ -511,12 +536,14 @@ function renderCard(user) {
   card.insertBefore(btn, card.firstChild);
   card.insertBefore(inviteBtn, card.childNodes[1]);
   const img = card.querySelector("img");
-  img.onerror = function() {
-    this.src = "data:image/svg+xml," + encodeURIComponent(
-      '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">' +
-      '<rect width="256" height="256" fill="#eee"/>' +
-      '<text x="128" y="140" text-anchor="middle" font-size="40" fill="#bbb">?</text></svg>');
-  };
+  if (img) {
+    img.onerror = function() {
+      this.src = "data:image/svg+xml," + encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">' +
+        '<rect width="256" height="256" fill="#eee"/>' +
+        '<text x="128" y="140" text-anchor="middle" font-size="40" fill="#bbb">?</text></svg>');
+    };
+  }
   return card;
 }
 
@@ -803,6 +830,11 @@ document.getElementById("newGalleryBtn").addEventListener("click", () => {
   renderGallery();
   showToast("Nieuwe galerij gestart");
 });
+
+document.getElementById("hideAvatarsBtn").addEventListener("click", () => {
+  setHideAvatars(!hideAvatars);
+});
+updateHideAvatarsBtn();
 
 // Live lookup: as you type/select a name, show whether it's already searched or uitgenodigd
 document.getElementById("names").addEventListener("input", updateLookupBar);
