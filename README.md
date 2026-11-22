@@ -70,6 +70,7 @@ Dockerfile              # node:22-alpine + tor + curl
 compose.selfhost.yaml   # Self-hosted compose service
 ARCHITECTURE.md         # Volledige ontwerpreferentie (API, rate-limit, Tor, deploy)
 AGENTS.md               # Korte regels voor AI-agents
+AI-ONBOARDING.md        # Plakbaar prompt om elke AI-model correct te onboarden
 ```
 
 ## Technieken

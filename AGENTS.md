@@ -7,6 +7,9 @@ WordFeud API and manages profile galleries. Listens on port **8011** inside the 
 > Tor internals, testing, deployment, env vars, gotchas) read
 > [`ARCHITECTURE.md`](./ARCHITECTURE.md). This file is the short rules + the
 > hard-won gotchas. Keep the two in sync.
+>
+> **Onboarding another AI model/agent to this repo?** Give it the paste-ready
+> prompt in [`AI-ONBOARDING.md`](./AI-ONBOARDING.md) as its first message.
 
 ## Self-hosting (persistent — survives reboots)
 

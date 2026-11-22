@@ -33,6 +33,7 @@ usernames (generating many name/number variations) and lets the user manage
   | `tests/fake_env.js` | Mock WordFeud API + minimal SOCKS5 + fake Tor control + fake `tor` bin |
   | `Dockerfile` | `node:22-alpine` + `apk add tor curl`, runs as non-root `node` |
   | `compose.selfhost.yaml` | Self-hosted compose service |
+  | `AI-ONBOARDING.md` | Paste-ready prompt to onboard any AI model onto this repo |
 
 ---
 
