@@ -52,6 +52,10 @@ Symptom of a regression: the filter bar finds nothing for names containing "s"
 (typing "samantha" shows "amatha"). Always verify the *served* HTML — `curl` the
 running app and grep the regex — never trust the source file alone.
 
+## Gotcha: file editing can mojibake UTF-8 docs
+
+Some AI file-edit tools round-trip whole files through the wrong charset, turning every `—`, `–`, `§`, `→`, `∈`, `…` and box-drawing character into `ΓÇö`-style mojibake across the ENTIRE file, not just the edited lines (hit while editing `ARCHITECTURE.md`). After ANY edit to a Unicode-bearing file, run `git diff` on it: if you see mojibake on lines you never touched, restore the file from HEAD (`git show HEAD:<file> > <file>`) and re-apply the intended edits byte-safely (e.g. a Python script that reads the HEAD bytes and writes UTF-8 back).
+
 ## Rate limit is per-ACCOUNT (and Tor alone can't bypass it)
 
 WordFeud rate-limits primarily by **account**, not by IP. This was verified live:
