@@ -13,6 +13,7 @@ met een **Tor-fallback** die doorkomt wanneer een account rate-limited is.
 - **Naamzoekfunctie** — Zoek gebruikers via de WordFeud API
 - **Achternaam + nummer combinaties** — Automatiseert zoeken naar `Naam1971` tot `Naam1985`, `Naam0` tot `Naam9`, en `Naam1`/`Naam12`/`Naam123`/`Naam1234`/`Naam12345`
 - **Scheidingstekens** — Zoekt met spatie, underscore, hash, en koppelteken (bijv. `Wendy_1981`, `Eva#1970`, `Judith-1`)
+- **Jaartallen-modus** — Optioneel (checkbox): zoek alleen varianten met jaartal 1971–1981 of 71–81 (bijv. `anne_1981`, `kim 71`); toepast op dropdown-keuze én geplakte namen
 - **Dutch names dropdown** — A-Z filter met veelvoorkomende Nederlandse voornamen
 - **Populaire namen dropdown** — Top 500 meest voorkomende Nederlandse meisjesnamen (CBS data)
 - **Galerijbeheer** — Bewaar, laad en verwijder galerijen (localStorage)

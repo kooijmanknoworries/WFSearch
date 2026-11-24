@@ -156,6 +156,10 @@ const HTML = `<!DOCTYPE html>
       <button id="searchBtn">Zoek Alle</button>
       <button id="clearBtn">Wis Geschiedenis</button>
     </div>
+    <div class="age-filter" style="background:#e3f2fd;border-color:#90caf9">
+      <label><input type="checkbox" id="yearOnly" style="width:auto" />
+        🔢 Alleen jaartallen 1971–1981 (bijv. <code>anne_1981</code>, <code>kim 71</code>)</label>
+    </div>
     <div class="age-filter">
       <label>🔓 Max account leeftijd:</label>
       <input id="maxYears" type="number" min="0" max="50" value="2" /> <label>jaar</label>
@@ -651,9 +655,18 @@ async function searchUser(username) {
   return 0;
 }
 
-function generateVariations(name) {
+function generateVariations(name, yearsOnly) {
   const variations = new Set();
   const separators = ["", " ", "_", "#", "-"];
+  if (yearsOnly) {
+    // Years-only mode: just 1971–1981 as full and 2-digit years (71–81),
+    // no base/digit/sequential candidates.
+    for (let year = 1971; year <= 1981; year++) {
+      for (const sep of separators) variations.add(name + sep + year);
+      for (const sep of separators) variations.add(name + sep + String(year - 1900));
+    }
+    return Array.from(variations);
+  }
   // Base name
   variations.add(name);
   // Trailing underscore
@@ -721,13 +734,30 @@ searchBtn.addEventListener("click", async () => {
   const namesInput = document.getElementById("names").value.trim();
   const selectedName = letterDropdown.value;
   const selectedPopular = popularDropdown.value;
-  let list;
+  const yearsOnly = document.getElementById("yearOnly").checked;
+  let list, baseNames;
   if (selectedPopular && popularNames.includes(selectedPopular)) {
-    list = generateVariations(selectedPopular);
+    list = generateVariations(selectedPopular, yearsOnly);
+    baseNames = [selectedPopular];
   } else if (selectedName && Object.values(dutchNames).flat().includes(selectedName)) {
-    list = generateVariations(selectedName);
+    list = generateVariations(selectedName, yearsOnly);
+    baseNames = [selectedName];
   } else if (namesInput) {
-    list = namesInput.split("\\n").map(s => s.trim()).filter(Boolean);
+    const pastedNames = namesInput.split("\\n").map(s => s.trim()).filter(Boolean);
+    baseNames = pastedNames;
+    if (yearsOnly) {
+      // Expand each pasted base name with the years-only pattern (union, deduped).
+      const seen = new Set();
+      list = [];
+      for (const n of pastedNames) {
+        for (const v of generateVariations(n, true)) {
+          if (!seen.has(v)) { seen.add(v); list.push(v); }
+        }
+      }
+    } else {
+      // Pasted names are searched verbatim unless the years-only mode is on.
+      list = pastedNames;
+    }
   } else {
     showToast("Selecteer een naam of plak namen hierboven");
     return;
@@ -737,7 +767,6 @@ searchBtn.addEventListener("click", async () => {
   // count — this run's base names are added below, so they are never skipped.
   const alreadyDone = new Set(list.filter(n => searchedSet.has(normName(n))));
   // Remember the base name(s) you asked to search for, so they show red in the menus
-  const baseNames = (selectedPopular || selectedName) ? [selectedPopular || selectedName] : list;
   for (const n of baseNames) searchedSet.add(normName(n));
   saveSearched();
   markMenuOptions();

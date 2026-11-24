@@ -133,8 +133,8 @@ If `results` is still `null` (Tor disabled or every account failed): respond
 when Tor is off).
 
 ### 5.1 Name variations (client-side, in the inlined JS)
-`generateVariations(name)` expands a base name into a `Set` of candidates the
-frontend searches in a batch:
+`generateVariations(name, yearsOnly)` expands a base name into a `Set` of
+candidates the frontend searches in a batch:
 - base name, and `name_`
 - `name + sep + year` for years **1971–1985**
 - `name + sep + d` for digits **0–9**
@@ -142,6 +142,11 @@ frontend searches in a batch:
 - `sep` ∈ `["", " ", "_", "#", "-"]`
 So `wendy` → `wendy1981`, `wendy_1981`, `wendy#1981`, `wendy-1981`, `wendy1`,
 `wendy123`, … (~125 variants).
+- **Years-only mode** (UI checkbox `#yearOnly`, passed as `yearsOnly`): only
+  `name + sep + year` for years **1971–1981** plus the 2-digit **71–81**
+  (110 candidates) — no base name, digits, or sequential numbers. Applies to
+  dropdown selections **and pasted names**; when unchecked, pasted names are
+  searched verbatim.
 
 ---
 
@@ -237,8 +242,9 @@ Features: name search with auto-variation batching, Dutch-names dropdown (A–Z)
 popular-names dropdown (top-500 CBS), galleries (create/save/load/delete),
 invite marking, **account-age filter** (max years/days to hide old accounts),
 a **hide-photos toggle** (replaces avatars with an initials placeholder),
-result-stats banner (persists until next search), red API-error banner, and a
-live rate-limit countdown on the search button (stays available while limited if
+result-stats banner (persists until next search), red API-error banner, an
+optional 1971–1981 years-only variation mode (checkbox; dropdown + pasted
+names), and a live rate-limit countdown on the search button (stays available while limited if
 Tor is on, labelled "via Tor"). The frontend polls `/api/accounts` every 30 s and
 ticks the countdowns every 1 s.
 
